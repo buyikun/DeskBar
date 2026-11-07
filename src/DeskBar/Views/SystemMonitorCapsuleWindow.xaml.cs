@@ -94,9 +94,23 @@ public partial class SystemMonitorCapsuleWindow : Window
     /// <summary>任务栏风格 / 亚克力色调变化后重新套用浮岛背景。</summary>
     internal void RefreshBackground()
     {
+        ApplyToneBorder();
         // 只有浮岛模式（部分亚克力）里浮岛悬在壁纸上方，才需要自带磨砂；
         // 整条模式下它直接盖在任务栏自己的底上，保证与音乐胶囊、任务栏材质一致。
-        AcrylicWindowHelper.Apply(this, _settings.AcrylicTone, "monitor", !TaskbarService.IsIslandActive);
+        AcrylicWindowHelper.Apply(this, _settings.EffectiveTone, "monitor", !TaskbarService.IsIslandActive, _settings.TaskbarBlurAmount);
+    }
+
+    /// <summary>描边色跟随 tone：浅色柔雾压暗边、深色黑丝提亮边。</summary>
+    private void ApplyToneBorder()
+    {
+        try
+        {
+            Resources["CapsuleBorderBrush"] = TonePalette.BorderBrush(_settings.EffectiveTone);
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Debug($"monitor capsule border apply failed: {ex.Message}");
+        }
     }
 
     // ---------------- 数据刷新 ----------------

@@ -17,10 +17,16 @@
         TextOptions.TextFormattingMode="Ideal"
         TextOptions.TextRenderingMode="ClearType">
 
+    <Window.Resources>
+        <!-- 描边色按 tone 下发：浅色柔雾走黑色系压边，深色黑丝走白色系提边。
+             默认值只是首帧占位，代码在 RefreshBackground 里会覆盖。 -->
+        <SolidColorBrush x:Key="CapsuleBorderBrush" Color="#38000000"/>
+    </Window.Resources>
+
     <Border x:Name="RootBorder"
             CornerRadius="9"
             Background="#01000000"
-            BorderBrush="#38000000"
+            BorderBrush="{DynamicResource CapsuleBorderBrush}"
             BorderThickness="1"
             Padding="10,0"
             Cursor="Hand"

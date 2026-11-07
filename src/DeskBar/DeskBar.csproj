@@ -13,9 +13,17 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <Version>1.0.1</Version>
+    <Version>2.0.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UseWindowsForms 会往 ImplicitUsings 里塞 System.Drawing / System.Windows.Forms，
+         导致 WPF 的同名类型（Color/Brush/Point/ComboBox/TextBox/KeyEventArgs…）全部歧义。
+         本项目只在 TrayIconHost.cs 里用 WinForms，且那里已显式 using，所以从全局移除。 -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="app.ico" />

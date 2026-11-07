@@ -1,0 +1,161 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ============================================================
+         右键菜单的「柔雾 / 黑丝」配色体系。
+         颜色键的默认值只是首帧占位，App.ApplyMenuTheme() 会按当前 tone 整体覆盖。
+         隐式样式（无 x:Key）故意放在应用级资源里：子菜单的 MenuItem 与
+         Separator 由 ItemsControl 自动生成，只有隐式样式能保证它们也被接管。
+         ============================================================ -->
+
+    <SolidColorBrush x:Key="DeskBarMenuSurfaceBrush" Color="#F22B2B2B"/>
+    <SolidColorBrush x:Key="DeskBarMenuBorderBrush" Color="#33FFFFFF"/>
+    <SolidColorBrush x:Key="DeskBarMenuTextBrush" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="DeskBarMenuTextMutedBrush" Color="#88FFFFFF"/>
+    <SolidColorBrush x:Key="DeskBarMenuCheckBrush" Color="#FF80D8FF"/>
+    <SolidColorBrush x:Key="DeskBarMenuItemHoverBrush" Color="#1FFFFFFF"/>
+    <SolidColorBrush x:Key="DeskBarMenuItemPressedBrush" Color="#33FFFFFF"/>
+    <SolidColorBrush x:Key="DeskBarMenuSeparatorBrush" Color="#22FFFFFF"/>
+
+    <!-- 分隔线：默认 Separator 的模板在菜单里会画出双线，这里统一成 1px -->
+    <Style TargetType="{x:Type Separator}">
+        <Setter Property="Height" Value="1"/>
+        <Setter Property="Margin" Value="8,4"/>
+        <Setter Property="Background" Value="{DynamicResource DeskBarMenuSeparatorBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type Separator}">
+                    <Border Background="{TemplateBinding Background}"
+                            Height="1"
+                            SnapsToDevicePixels="True"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 菜单项：圆角高亮 + 左侧勾选对勾 + 可选的快捷键文字与子菜单箭头。
+         圆角、字号、字体走应用级令牌（Themes/Tokens.xaml），
+         与设置窗口保持同一套阶梯，不再各处写死 6 / 8 / 13。 -->
+    <Style TargetType="{x:Type MenuItem}">
+        <Setter Property="Foreground" Value="{DynamicResource DeskBarMenuTextBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource FontFamilyBase}"/>
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}"/>
+        <Setter Property="Padding" Value="10,6"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type MenuItem}">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                CornerRadius="{DynamicResource RadiusControl}"
+                                Background="Transparent"
+                                Padding="{TemplateBinding Padding}"
+                                Margin="4,1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 勾选标记：只有勾选态才看得见，不勾选时这一列仍然占位，
+                                     保证所有菜单项的文字左边缘对齐 -->
+                                <Path x:Name="CheckMark"
+                                      Grid.Column="0"
+                                      Data="M 0,3.5 L 3,6.5 L 8.5,0"
+                                      Stroke="{DynamicResource DeskBarMenuCheckBrush}"
+                                      StrokeThickness="1.6"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      Visibility="Collapsed"/>
+
+                                <ContentPresenter Grid.Column="1"
+                                                  ContentSource="Header"
+                                                  RecognizesAccessKey="True"
+                                                  VerticalAlignment="Center"
+                                                  Margin="2,0,6,0"/>
+
+                                <TextBlock x:Name="Gesture"
+                                           Grid.Column="2"
+                                           Text="{TemplateBinding InputGestureText}"
+                                           Foreground="{DynamicResource DeskBarMenuTextMutedBrush}"
+                                           Margin="16,0,4,0"
+                                           VerticalAlignment="Center"/>
+
+                                <Path x:Name="SubArrow"
+                                      Grid.Column="3"
+                                      Data="M 0,0 L 3.5,3.5 L 0,7"
+                                      Stroke="{DynamicResource DeskBarMenuTextMutedBrush}"
+                                      StrokeThickness="1.4"
+                                      Margin="8,0,2,0"
+                                      VerticalAlignment="Center"
+                                      Visibility="Collapsed"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- 子菜单：显式 AllowsTransparency，否则外层 Margin 会退化成黑块 -->
+                        <Popup x:Name="PART_Popup"
+                               IsOpen="{TemplateBinding IsSubmenuOpen}"
+                               AllowsTransparency="True"
+                               Focusable="False"
+                               PopupAnimation="Fade"
+                               Placement="Right"
+                               HorizontalOffset="-2">
+                            <Border CornerRadius="{DynamicResource RadiusShell}"
+                                    Background="{DynamicResource DeskBarMenuSurfaceBrush}"
+                                    BorderBrush="{DynamicResource DeskBarMenuBorderBrush}"
+                                    BorderThickness="1"
+                                    Padding="1,4"
+                                    Margin="4,0,4,4">
+                                <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="Role" Value="SubmenuHeader">
+                            <Setter TargetName="SubArrow" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource DeskBarMenuItemHoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource DeskBarMenuItemPressedBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource DeskBarMenuTextMutedBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 菜单外壳：圆角 + 1px 描边，阴影交给系统（HasDropShadow）。
+         刻意不给模板加 Margin 和 DropShadowEffect —— ContextMenu 的 PopupRoot
+         不保证分层，留白一旦不透明就会变成一圈死黑边。 -->
+    <Style TargetType="{x:Type ContextMenu}">
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="FontFamily" Value="{DynamicResource FontFamilyBase}"/>
+        <Setter Property="HasDropShadow" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ContextMenu}">
+                    <Border CornerRadius="{DynamicResource RadiusShell}"
+                            Background="{DynamicResource DeskBarMenuSurfaceBrush}"
+                            BorderBrush="{DynamicResource DeskBarMenuBorderBrush}"
+                            BorderThickness="1"
+                            Padding="1,4">
+                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+</ResourceDictionary>

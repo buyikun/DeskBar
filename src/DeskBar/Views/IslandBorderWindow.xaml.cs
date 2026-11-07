@@ -31,8 +31,14 @@ public partial class IslandBorderWindow : Window
     // 一次瞬时误判就会让描边凭空消失。用时长而非轮数，因为本窗口是 16ms tick。
     private DateTime _goneSince = DateTime.MinValue;
     private const int GoneMsNeeded = 900;
-    private int _raiseTicks;
     private bool _isDisposed;
+
+    // 描边色随 tone 走：浅色柔雾用黑色系压边，深色黑丝用白色系提边。
+    // natural / auto 跟系统主题，所以除了响应设置变更，还要低频复查系统主题 ——
+    // 本窗口 16ms tick，每帧读注册表太浪费，改成约每秒一次。
+    private bool _darkTone;
+    private int _toneCheckTicks;
+    private const int ToneCheckIntervalTicks = 60;
 
     /// <summary>
     /// 任务栏真的不在屏幕上了才返回 false：需连续 GoneTicksNeeded 轮判定失败。
@@ -64,21 +70,56 @@ public partial class IslandBorderWindow : Window
             try {
                 AcrylicWindowHelper.MakeClickThrough(this);
                 AcrylicWindowHelper.BindToTaskbarLayer(this);
+                // 首次显示前就把描边色定下来，否则会在屏幕外那一刻留一帧无色。
+                ApplyToneBorder();
             } catch { }
         };
 
         Closed += (_, _) =>
         {
             _isDisposed = true;
-            try { _timer.Stop(); } catch { }
+            // 构造期间 Closed 可能早于 _timer 赋值触发，加空判断避免 CS8602。
+            try { _timer?.Stop(); } catch { }
         };
 
         _timer = new DispatcherTimer(DispatcherPriority.Render)
         {
             Interval = TimeSpan.FromMilliseconds(16)
         };
-        _timer.Tick += (_, _) => Sync();
+        _timer.Tick += (_, _) =>
+        {
+            Sync();
+            // 描边色要在窗口真正显示前就位，所以并入主 tick 而不是另起定时器。
+            if (++_toneCheckTicks >= ToneCheckIntervalTicks)
+            {
+                _toneCheckTicks = 0;
+                ApplyToneBorder();
+            }
+        };
         _timer.Start();
+    }
+
+    /// <summary>
+    /// 按当前 tone 下发描边色。只有「深/浅」翻转时才真的改属性，
+    /// 因为本窗口 16ms 一次 tick，无条件赋值会触发无用重绘。
+    /// </summary>
+    private void ApplyToneBorder()
+    {
+        if (_isDisposed) return;
+        try
+        {
+            // 必须用 EffectiveTone：自动主题按时段写入的是 RuntimeTone，
+            // 只读 AcrylicTone 会让描边比底色慢一拍（比如夜间已切黑丝，边还是浅色）。
+            var tone = App.Settings?.EffectiveTone;
+            bool dark = TonePalette.IsDark(tone);
+            if (dark == _darkTone && Edge.BorderBrush is not null) return;
+            _darkTone = dark;
+            Edge.BorderBrush = TonePalette.BorderBrush(tone);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"island border tone apply failed: {ex.Message}");
+        }
     }
 
     private void Sync()
@@ -161,8 +202,6 @@ public partial class IslandBorderWindow : Window
                 AcrylicWindowHelper.KeepAboveTaskbar(this);
                 return;
             }
-            _raiseTicks = 0;
-
             _lx = dipL;
             _ly = dipT;
             _lw = dipW;

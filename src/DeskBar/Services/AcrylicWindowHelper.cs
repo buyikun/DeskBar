@@ -11,7 +11,7 @@ namespace DeskBar.Services;
 /// </summary>
 internal static class AcrylicWindowHelper
 {
-    public static void Apply(Window window, string? tone, string logTag, bool flat = false)
+    public static void Apply(Window window, string? tone, string logTag, bool flat = false, int blur = 18)
     {
         var hwnd = new WindowInteropHelper(window).Handle;
         if (hwnd == IntPtr.Zero) return;
@@ -35,6 +35,9 @@ internal static class AcrylicWindowHelper
             AnimationId = 0
         };
 
+        // 如需调整模糊程度，可在此处扩展，但 AccentPolicy 本身不支持直接指定模糊度数值，
+        // 我们通过调整 AccentState 或其他 DWM 属性尝试映射，目前保持原生行为。
+        
         int size = Marshal.SizeOf<AccentPolicy>();
         IntPtr ptr = Marshal.AllocHGlobal(size);
         try

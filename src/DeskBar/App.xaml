@@ -4,6 +4,15 @@
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- 视觉令牌（字体 / 圆角 / 字号）。必须排在最前：
+                     后面的字典与窗口样式都按 key 引用它，先合并才能被解析。 -->
+                <ResourceDictionary Source="Themes/Tokens.xaml"/>
+                <!-- 右键菜单的柔雾/黑丝配色与模板。内含无 key 的隐式样式，
+                     所以必须挂在应用级资源上，子菜单自动生成的项才能被接管。 -->
+                <ResourceDictionary Source="Themes/MenuStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
             <SolidColorBrush x:Key="WindowBackground" Color="#202020" />
             <SolidColorBrush x:Key="CardBackground" Color="#2B2B2B" />
             <SolidColorBrush x:Key="ForegroundBrush" Color="#F0F0F0" />

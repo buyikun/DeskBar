@@ -36,3 +36,6 @@ trace*.txt
 widget_trace.txt
 verify-out/
 test_zip_extract/
+
+# Cross-session sync baseline (sync-frontend.ps1)
+.sync/

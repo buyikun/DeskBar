@@ -91,33 +91,34 @@ internal static class TaskbarService
 
     public static void ApplyStyle(string style, string? tone = null)
     {
-        tone ??= App.Settings?.AcrylicTone ?? "natural";
-        Log.Info($"TaskbarService.ApplyStyle: style={style}, tone={tone}");
+        tone ??= App.Settings?.EffectiveTone ?? "natural";
+        int blur = App.Settings?.TaskbarBlurAmount ?? 18;
+        Log.Info($"TaskbarService.ApplyStyle: style={style}, tone={tone}, blur={blur}");
 
         switch (style)
         {
             case "acrylic":
                 StartWatchOnly();
                 RestoreTaskbarRegion();
-                NativeTaskbarAppearanceService.Apply("acrylic", tone);
+                NativeTaskbarAppearanceService.Apply("acrylic", tone, blur);
                 break;
             case "clear":
                 StartWatchOnly();
                 RestoreTaskbarRegion();
-                NativeTaskbarAppearanceService.Apply("transparent", tone);
+                NativeTaskbarAppearanceService.Apply("transparent", tone, blur);
                 break;
             case "island_acrylic":
-                NativeTaskbarAppearanceService.Apply("acrylic", tone);
-                StartIslandWatch();
+                NativeTaskbarAppearanceService.Apply("acrylic", tone, blur);
+                StartIslandOrDegrade();
                 break;
             case "island_clear":
-                NativeTaskbarAppearanceService.Apply("transparent", tone);
-                StartIslandWatch();
+                NativeTaskbarAppearanceService.Apply("transparent", tone, blur);
+                StartIslandOrDegrade();
                 break;
             default:
                 StartWatchOnly();
                 RestoreTaskbarRegion();
-                NativeTaskbarAppearanceService.Apply("default", tone);
+                NativeTaskbarAppearanceService.Apply("default", tone, blur);
                 break;
         }
     }
@@ -172,6 +173,29 @@ internal static class TaskbarService
         _watchActive = true;
         Log.Info("StartWatchOnly called, geometry-only watch");
         StartTimers();
+    }
+
+    /// <summary>
+    /// 岛模式启动。裁剪任务栏的前提是外观引擎真的接管了 Explorer：
+    /// 注入失败时任务栏仍是原生不透明层，此时执行「只保留中间区 ∪ 托盘区」的裁剪会直接把
+    /// 开始区、搜索框、时钟区整块挖掉，且没有任何磨砂层来补偿视觉 —— 用户看到的
+    /// 就是「任务栏原本的功能全失效、点空白处直接穿透、浮岛组件也一并消失」。
+    /// 这种情况下降级为整条几何监视模式：浮岛照常贴边显示，任务栏一个像素都不动。
+    /// </summary>
+    private static void StartIslandOrDegrade()
+    {
+        if (NativeTaskbarAppearanceService.IsAvailable)
+        {
+            StartIslandWatch();
+            return;
+        }
+
+        Log.Warn("island mode degraded to geometry-only watch: taskbar appearance engine unavailable. " +
+                 "ExplorerTAP 注入失败（通常是 ExplorerTAP.dll 缺失/版本不匹配，或 Explorer 正在重启；" +
+                 "与是否管理员权限无关）；已放弃任务栏裁剪，保持原生任务栏完整。");
+        _lastRegionSig = "";
+        RestoreTaskbarRegion();
+        StartWatchOnly();
     }
 
     private static void StartTimers()
@@ -795,7 +819,7 @@ internal static class TaskbarService
         {
             var tray = NativeMethods.FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return false;
-            if (!NativeMethods.GetWindowRect(tray, out var rc)) return false;
+            if (!NativeMethods.TryGetWindowBounds(tray, out var rc)) return false;
             left = rc.left; top = rc.top; right = rc.right; bottom = rc.bottom;
             return right > left && bottom > top;
         }
@@ -813,7 +837,7 @@ internal static class TaskbarService
             var tray = NativeMethods.FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return false;
             if (!NativeMethods.IsWindowVisible(tray)) return false;
-            if (!NativeMethods.GetWindowRect(tray, out var rc)) return false;
+            if (!NativeMethods.TryGetWindowBounds(tray, out var rc)) return false;
             int screenH = NativeMethods.GetSystemMetrics(1);   // SM_CYSCREEN
             if (rc.top >= screenH - 1 || rc.bottom <= 1) return false;
             return rc.right > rc.left && rc.bottom > rc.top;
@@ -957,6 +981,13 @@ internal static class TaskbarService
         }
         catch { }
 
+        // 兜底：任务栏窗口或尺寸拿不到时，什么区域都不要下发。
+        if (tray == IntPtr.Zero || trayW <= 0 || trayH <= 0)
+        {
+            Log.Warn($"skip taskbar region (bad tray): tray={trayW}x{trayH}");
+            return;
+        }
+
         // 整条模式：任务栏铺满整条，但要把两个浮岛的位置挖掉。
         // 顶层窗口之间没有稳定的 z 序，点一下任务栏 explorer 就会把它抬到浮岛之上；
         // 浮岛模式本来就为浮岛挖了洞，所以不受影响，而整条模式如果不挖洞，
@@ -1011,12 +1042,50 @@ internal static class TaskbarService
             return;
         }
 
+        // 前置护栏：岛模式裁剪只在任务栏外观引擎确实接管了 Explorer 时才成立。
+        // 注入失败时任务栏还是原生不透明层，此时裁剪只会把它挖残（见 StartIslandOrDegrade 注释）。
+        // 这道判断同时覆盖「启动时注入成功、之后 Explorer 重启导致 COM 断连」的运行期退化。
+        if (!NativeTaskbarAppearanceService.IsAvailable)
+        {
+            if (_lastRegionSig.Length != 0)
+            {
+                _lastRegionSig = "";
+                NativeMethods.SetWindowRgn(tray, IntPtr.Zero, true);
+            }
+            return;
+        }
+
+        // 安全护栏：UIA 还没扫出有效边界（字段初值是 -1）或矩形退化时，绝不能下发裁剪区域。
+        // 岛模式的区域是「中间区 ∪ 托盘区」，一旦 c1/c2 为 -1，CreateSmoothTopRoundedRgn
+        // 会返回空区域，SetWindowRgn 就把整条任务栏瞬间裁没 —— 表现正是
+        // 「任务栏什么都没了、点空白处直接穿透到桌面、浮岛组件也一并消失」。
+        if (c1 < 0 || c2 <= c1 || t1 < 0 || t2 <= t1 ||
+            trayW <= 0 || trayH <= 0 || c2 > trayW || t2 > trayW)
+        {
+            Log.Warn($"skip island region (invalid bounds): c=({c1},{c2}) t=({t1},{t2}) tray={trayW}x{trayH}");
+            if (_lastRegionSig.Length != 0)
+            {
+                _lastRegionSig = "";
+                NativeMethods.SetWindowRgn(tray, IntPtr.Zero, true);
+            }
+            return;
+        }
+
         var isig = "I:" + c1 + "," + c2 + "," + t1 + "," + t2 + "," + trayW + "x" + trayH;
         if (isig == _lastRegionSig) return;
         _lastRegionSig = isig;
 
         var rgnCenter = CreateSmoothTopRoundedRgn(c1, 0, c2, trayH);
         var rgnTray = CreateSmoothTopRoundedRgn(t1, 0, t2, trayH);
+        if (rgnCenter == IntPtr.Zero || rgnTray == IntPtr.Zero)
+        {
+            Log.Warn("skip island region (rgn creation failed)");
+            if (rgnCenter != IntPtr.Zero) NativeMethods.DeleteObject(rgnCenter);
+            if (rgnTray != IntPtr.Zero) NativeMethods.DeleteObject(rgnTray);
+            _lastRegionSig = "";
+            NativeMethods.SetWindowRgn(tray, IntPtr.Zero, true);
+            return;
+        }
 
         var rgnTotal = NativeMethods.CreateRectRgn(0, 0, 0, 0);
         NativeMethods.CombineRgn(rgnTotal, rgnCenter, rgnTray, NativeMethods.RGN_OR);

@@ -8,13 +8,25 @@ namespace DeskBar.Views;
 /// <summary>
 /// 托盘图标宿主。
 /// 本机实测：H.NotifyIcon 的 ForceCreate 在此环境抛 "TryCreate failed"，
-/// 因此改用 System.Windows.Forms.NotifyIcon（官方 API，无需额外依赖）。
+/// 因此托盘图标本身仍用 System.Windows.Forms.NotifyIcon（官方 API，无需额外依赖）；
+/// 但右键菜单已换成 WPF ContextMenu —— 只有 WPF 才能吃到应用级的
+/// 柔雾/黑丝资源字典（Themes/MenuStyles.xaml），与音乐胶囊菜单保持同一套外观。
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
     private readonly App _app;
     private NotifyIcon? _icon;
     private Icon? _ownedIcon;
+
+    /// <summary>
+    /// WPF 菜单的归属窗口。ContextMenu 必须挂在一个占据前台的窗口上，
+    /// 否则点击菜单以外的区域不会关闭菜单（托盘场景尤其明显：
+    /// 右键托盘时前台窗口是资源管理器，我们不在前台就拿不到跨进程的鼠标捕获）。
+    /// 所以造一个 1x1、透明、放在屏幕外的窗口专门干这件事。
+    /// </summary>
+    private Window? _menuOwner;
+    private IntPtr _menuOwnerHwnd;
+    private System.Windows.Controls.ContextMenu? _menu;
 
     public TrayIconHost(App app) => _app = app;
 
@@ -31,24 +43,114 @@ internal sealed class TrayIconHost : IDisposable
         };
         Log.Info($"tray: NotifyIcon created, visible={visible}");
 
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("打开设置", null, (_, _) => _app.ShowSettingsWindow());
-        menu.Items.Add("显示/隐藏桌面图标", null, (_, _) =>
-        {
-            var v = App.Icons.Toggle();
-            UpdateTip(v);
-        });
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => System.Windows.Application.Current.Shutdown());
-
-        _icon.ContextMenuStrip = menu;
         _icon.MouseClick += (_, e) =>
         {
-            if (e.Button == MouseButtons.Left) _app.ShowSettingsWindow();
+            if (e.Button == MouseButtons.Left)
+            {
+                _app.ShowSettingsWindow();
+            }
+            else if (e.Button == MouseButtons.Right)
+            {
+                ShowContextMenu();
+            }
         };
         _icon.DoubleClick += (_, _) => _app.ShowSettingsWindow();
 
         Log.Info("tray: ready");
+    }
+
+    // ---------------- WPF 右键菜单 ----------------
+
+    /// <summary>首次右键时才造 owner 窗口，避免启动期多一个无谓的顶层窗口。</summary>
+    private void EnsureMenuOwner()
+    {
+        if (_menuOwner is not null) return;
+
+        _menuOwner = new Window
+        {
+            Width = 1,
+            Height = 1,
+            Left = -4000,
+            Top = -4000,
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            // 不抢焦点：真正决定菜单能否关闭的是下面主动申请的前台权，
+            // 而不是窗口激活态的副作用。抢焦点会让任务栏短暂失焦。
+            ShowActivated = false,
+            AllowsTransparency = true,
+            Background = System.Windows.Media.Brushes.Transparent,
+            Title = "DeskBarMenuOwner"
+        };
+        _menuOwner.Show();
+        _menuOwnerHwnd = new System.Windows.Interop.WindowInteropHelper(_menuOwner).Handle;
+        Log.Info($"tray: menu owner created, hwnd=0x{_menuOwnerHwnd:X}");
+    }
+
+    private void ShowContextMenu()
+    {
+        try
+        {
+            EnsureMenuOwner();
+            if (_menuOwner is null) return;
+
+            _menu ??= BuildMenu();
+
+            _menu.PlacementTarget = _menuOwner;
+            _menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+
+            // 把前台权移到 owner 窗口，PopupRoot 才能拿到跨进程鼠标捕获，
+            // 从而实现「点菜单外面任意程序都能关掉菜单」这一用户预期行为。
+            if (_menuOwnerHwnd != IntPtr.Zero)
+            {
+                Services.PlayerWindowControl.ActivateWindow(_menuOwnerHwnd);
+            }
+
+            _menu.IsOpen = true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"tray: show context menu failed: {ex.Message}");
+        }
+    }
+
+    private System.Windows.Controls.ContextMenu BuildMenu()
+    {
+        var menu = new System.Windows.Controls.ContextMenu();
+
+        var openItem = new System.Windows.Controls.MenuItem { Header = "打开设置" };
+        openItem.Click += (_, _) => _app.ShowSettingsWindow();
+        menu.Items.Add(openItem);
+
+        var toggleIcons = new System.Windows.Controls.MenuItem { Header = "显示/隐藏桌面图标" };
+        toggleIcons.Click += (_, _) =>
+        {
+            var v = App.Icons.Toggle();
+            UpdateTip(v);
+        };
+        menu.Items.Add(toggleIcons);
+
+        menu.Items.Add(new System.Windows.Controls.Separator());
+
+        var quit = new System.Windows.Controls.MenuItem { Header = "退出" };
+        quit.Click += (_, _) => System.Windows.Application.Current.Shutdown();
+        menu.Items.Add(quit);
+
+        // 菜单收起后把前台队列交还，避免 owner 窗口长期霸占前台
+        // 导致其他程序的激活行为变怪。
+        menu.Closed += (_, _) =>
+        {
+            try
+            {
+                if (_menuOwnerHwnd != IntPtr.Zero)
+                {
+                    Interop.NativeMethods.PostMessageW(_menuOwnerHwnd, 0x0000, IntPtr.Zero, IntPtr.Zero);
+                }
+            }
+            catch { }
+        };
+
+        return menu;
     }
 
     private void UpdateTip(bool visible)
@@ -134,6 +236,10 @@ internal sealed class TrayIconHost : IDisposable
             _icon.Dispose();
             _icon = null;
         }
+        try { if (_menu is not null) _menu.IsOpen = false; } catch { }
+        try { _menuOwner?.Close(); } catch { }
+        _menuOwner = null;
+        _menu = null;
         _ownedIcon?.Dispose();
         _ownedIcon = null;
     }

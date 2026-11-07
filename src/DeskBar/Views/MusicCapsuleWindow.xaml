@@ -11,7 +11,7 @@
         Topmost="True"
         ResizeMode="NoResize"
         SizeToContent="Manual"
-        Width="228"
+        Width="250"
         Height="48"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
@@ -19,15 +19,22 @@
         TextOptions.TextRenderingMode="ClearType">
 
     <Window.Resources>
+        <!-- 描边与交互色阶按 tone 下发（浅色柔雾走黑色系、深色黑丝走白色系）。
+             用 DynamicResource 而不是硬编码，代码里换画刷即可即时生效，
+             不必重建 ControlTemplate。默认值只是首次绘制前的占位。 -->
+        <SolidColorBrush x:Key="CapsuleBorderBrush" Color="#26FFFFFF"/>
+        <SolidColorBrush x:Key="CapsuleHoverBrush" Color="#33FFFFFF"/>
+        <SolidColorBrush x:Key="CapsulePressedBrush" Color="#55FFFFFF"/>
+
         <Style x:Key="CapsuleButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="26"/>
-            <Setter Property="Height" Value="26"/>
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Height" Value="24"/>
             <Setter Property="Margin" Value="1,0"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Foreground" Value="#E6FFFFFF"/>
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="11"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="Template">
@@ -40,11 +47,11 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF"/>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource CapsuleHoverBrush}"/>
                                 <Setter Property="Foreground" Value="#FFFFFFFF"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#55FFFFFF"/>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource CapsulePressedBrush}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Foreground" Value="#55FFFFFF"/>
@@ -57,30 +64,31 @@
     </Window.Resources>
 
     <Border x:Name="RootBorder"
-            CornerRadius="9"
-            Background="#40000000"
-            BorderBrush="#38000000"
+            CornerRadius="10"
+            Background="#4D000000"
+            BorderBrush="{DynamicResource CapsuleBorderBrush}"
             BorderThickness="1"
-            Padding="7,0">
+            Padding="8,0">
         <Grid VerticalAlignment="Center">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <!-- 专辑封面 -->
-            <Border Grid.Column="0"
-                    Width="32" Height="32"
-                    CornerRadius="6"
+            <Border x:Name="BorderCover"
+                    Grid.Column="0"
+                    Width="34" Height="34"
+                    CornerRadius="7"
                     Background="#22FFFFFF"
                     ClipToBounds="True"
+                    Cursor="Hand"
                     VerticalAlignment="Center">
                 <Grid>
                     <TextBlock x:Name="TxtNoCover"
                                Text="&#xE8D6;"
                                FontFamily="Segoe MDL2 Assets"
-                               FontSize="15"
+                               FontSize="16"
                                Foreground="#99FFFFFF"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"/>
@@ -88,35 +96,75 @@
                 </Grid>
             </Border>
 
-            <!-- 曲目信息 -->
+            <!-- 曲目信息：第一行「歌名 - 歌手」是辅助信息，第二行歌词才是主角 -->
             <StackPanel Grid.Column="1"
-                        Margin="8,0,4,0"
+                        Margin="9,0,5,0"
                         VerticalAlignment="Center">
                 <TextBlock x:Name="TxtTitle"
                            Text="未知曲目"
-                           FontSize="12"
-                           FontWeight="SemiBold"
-                           Foreground="#FFFFFFFF"
-                           TextTrimming="CharacterEllipsis"
-                           MaxWidth="104"/>
-                <TextBlock x:Name="TxtArtist"
-                           Text="未知歌手"
-                           FontSize="10"
-                           Foreground="#B0FFFFFF"
-                           TextTrimming="CharacterEllipsis"
-                           MaxWidth="104"
-                           Margin="0,1,0,0"/>
+                           FontSize="10.5"
+                           Foreground="#80FFFFFF"
+                           TextTrimming="CharacterEllipsis"/>
+
+                <!-- 第二行：实时歌词（无歌词时回落显示歌手）。放不下时由代码驱动跑马灯 -->
+                <!-- 第二行：实时歌词（无歌词时回落显示歌手）。
+                     双层文字 + 逐字高亮（照 WaterSprite 的 base / played 两层）：
+                     底层整句暗色，上层同文本但 Width = 已唱像素宽度，靠 ClipToBounds 裁出亮色部分。
+                     滚动由外层 LyricTrack 的 TranslateTransform 负责。 -->
+                <!-- 滚动容器照 WaterSprite 交给浏览器 scrollLeft 的做法：用 ScrollViewer 让 WPF 布局
+                     引擎自己给出 ExtentWidth 与 ScrollableWidth，代码不再自己量文本宽度算上限，
+                     因此末字必定能滚出来（ScrollableWidth 就是 内容宽 - 视口宽 的真实值）。 -->
+                <ScrollViewer x:Name="LyricScroller"
+                              ClipToBounds="True"
+                              Margin="0,1,0,0"
+                              HorizontalScrollBarVisibility="Hidden"
+                              VerticalScrollBarVisibility="Disabled"
+                              IsTabStop="False"
+                              Focusable="False"
+                              PanningMode="None">
+                    <Grid x:Name="LyricTrack" HorizontalAlignment="Left">
+                        <TextBlock x:Name="TxtArtist"
+                                   Text="未知歌手"
+                                   FontSize="15"
+                                   Foreground="#80FFFFFF"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtLyricPlayed"
+                                   Text=""
+                                   FontSize="15"
+                                   Foreground="#FFFFFFFF"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Center"
+                                   ClipToBounds="True"
+                                   Width="0"/>
+                    </Grid>
+                </ScrollViewer>
             </StackPanel>
 
-            <!-- 播放控制 -->
-            <StackPanel x:Name="PanelControls"
-                        Grid.Column="2"
-                        Orientation="Horizontal"
-                        VerticalAlignment="Center">
-                <Button x:Name="BtnPrev" Style="{StaticResource CapsuleButtonStyle}" Content="&#xE892;" ToolTip="上一曲"/>
-                <Button x:Name="BtnPlay" Style="{StaticResource CapsuleButtonStyle}" Content="&#xE768;" ToolTip="播放/暂停"/>
-                <Button x:Name="BtnNext" Style="{StaticResource CapsuleButtonStyle}" Content="&#xE893;" ToolTip="下一曲"/>
-            </StackPanel>
+            <!-- 播放控制：浮层覆盖在歌词右侧，不占用布局宽度（避免鼠标移入时歌词视口收缩、滚动量突变）。
+                 左侧用渐变遮罩，让歌词文字平滑淡出到按钮下方。 -->
+            <Border x:Name="ControlsBackdrop"
+                    Grid.Column="1"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    CornerRadius="6,0,0,6"
+                    Padding="4,0,0,0"
+                    Visibility="Collapsed">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="#00000000" Offset="0"/>
+                        <GradientStop Color="#E6141414" Offset="0.40"/>
+                        <GradientStop Color="#E6141414" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <StackPanel x:Name="PanelControls"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button x:Name="BtnPrev" Style="{StaticResource CapsuleButtonStyle}" Content="&#xE892;" ToolTip="上一曲"/>
+                    <Button x:Name="BtnPlay" Style="{StaticResource CapsuleButtonStyle}" Content="&#xE768;" ToolTip="播放/暂停"/>
+                    <Button x:Name="BtnNext" Style="{StaticResource CapsuleButtonStyle}" Content="&#xE893;" ToolTip="下一曲"/>
+                </StackPanel>
+            </Border>
         </Grid>
     </Border>
 </Window>

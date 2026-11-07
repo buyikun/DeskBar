@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using Microsoft.Win32;
 
@@ -106,7 +107,66 @@ internal static class StartupService
         }
         catch (Exception ex)
         {
-            Log.Error($"Startup: set failed: {ex.Message}");
+            Log.Error($"Startup: set failed: {ex.GetType().FullName}: {ex.Message} | {ex.StackTrace?.Replace('\r', ' ').Replace('\n', ' ')}");
+            return SetEnabledViaRegExe(enable);
+        }
+    }
+
+    /// <summary>
+    /// 托管注册表 API 被拒时的兜底：调用 reg.exe 直接读写 HKCU Run。
+    /// 取证结论：报错并非真实权限缺失——HKCU\...\Run 的 ACL 中 Administrator 为 FullControl，
+    /// 同环境下 PowerShell 的 OpenSubKey(writable:true) 与 SetValue 均成功；
+    /// 因此保留一条不经过 Microsoft.Win32.Registry 访问检查的旁路，保证自启开关始终可用。
+    /// </summary>
+    private static bool SetEnabledViaRegExe(bool enable)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("reg.exe")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            if (enable)
+            {
+                var cmd = BuildCommand();
+                if (string.IsNullOrEmpty(cmd))
+                {
+                    Log.Error("Startup: cannot resolve exe path");
+                    return false;
+                }
+                psi.ArgumentList.Add("add");
+                psi.ArgumentList.Add(@"HKCU\Software\Microsoft\Windows\CurrentVersion\Run");
+                psi.ArgumentList.Add("/v"); psi.ArgumentList.Add(ValueName);
+                psi.ArgumentList.Add("/t"); psi.ArgumentList.Add("REG_SZ");
+                psi.ArgumentList.Add("/d"); psi.ArgumentList.Add(cmd);
+                psi.ArgumentList.Add("/f");
+            }
+            else
+            {
+                psi.ArgumentList.Add("delete");
+                psi.ArgumentList.Add(@"HKCU\Software\Microsoft\Windows\CurrentVersion\Run");
+                psi.ArgumentList.Add("/v"); psi.ArgumentList.Add(ValueName);
+                psi.ArgumentList.Add("/f");
+            }
+            using var p = Process.Start(psi);
+            if (p is null) return false;
+            var stdout = p.StandardOutput.ReadToEnd();
+            var stderr = p.StandardError.ReadToEnd();
+            p.WaitForExit(5000);
+            var code = p.HasExited ? p.ExitCode : -1;
+            var ok = code == 0;
+            Log.Info($"Startup: reg.exe fallback {(enable ? "enable" : "disable")} -> exit={code} ok={ok}");
+            if (!ok && !string.IsNullOrWhiteSpace(stderr))
+                Log.Warn($"Startup: reg.exe stderr='{stderr.Trim()}'");
+            // 删除一个本就不存在的值属于成功语义
+            return ok || !enable;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Startup: reg.exe fallback failed: {ex.Message}");
             return false;
         }
     }

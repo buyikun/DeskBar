@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -10,13 +13,11 @@ namespace DeskBar.Views;
 
 /// <summary>
 /// 任务栏音乐胶囊浮岛窗口。
-/// 停靠在托盘浮岛左侧，显示专辑封面 / 曲名 / 歌手，并提供上一曲、播放暂停、下一曲控制。
+/// 停靠在托盘浮岛左侧，显示专辑封面 / 曲名 / 歌手 / 实时歌词，并提供上一曲、播放暂停、下一曲控制。
 /// 无播放会话或功能关闭时自动隐藏，不占据任务栏空间。
 /// </summary>
 public partial class MusicCapsuleWindow : Window
 {
-    // 与托盘区左边缘的间距（物理像素）。太小（8px）时两圈独立描边会挤成一条
-    // 「双线竖缝」，中间看不出任务栏底色；14px 让两框各自的圆角与外框都看得清。
     private const int GapToTrayPx = 14;
 
     private readonly AppSettings _settings;
@@ -25,23 +26,36 @@ public partial class MusicCapsuleWindow : Window
     private MediaTrackInfo? _current;
     private bool _shown;
     private bool _wantVisible;
-    // 最近一次真正下发过的窗口位置与尺寸；相同就不再调用 SetWindowPos。
     private int _lastX = int.MinValue, _lastY, _lastW, _lastH;
 
-    // 任务栏「不可用」的去抖（同监控浮岛）：拖拽托盘图标时 explorer 会短暂重排任务栏，
-    // 单次误判会让胶囊整块消失 140ms 再淡入。用「连续多久」而非「多少轮」，
-    // 因为本窗口 400ms tick、描边窗口 16ms tick，轮数语义不一致。
     private DateTime _taskbarGoneSince = DateTime.MinValue;
     private const int TaskbarGoneMsNeeded = 900;
-    // 整条模式下胶囊不再挖洞，改用 60fps 轻量 z 序守卫：
-    // 只有当「正压着我们的就是任务栏本身」时才把自己抬回最上层（弹出面板压着时不抢）。
     private DispatcherTimer? _zGuard;
-
-    // 50ms 的位置跟随定时器：托盘图标被拖出/拖入时 TrayNotifyWnd 立刻变形，
-    // 靠 400ms 的可见性定时器去跟会有明显滞后，看起来就是「不跟随」。
-    // RepositionWindow 内部有「位置尺寸都没变就 return」的短路，平时几乎零开销。
     private DispatcherTimer? _followTimer;
     private bool _isDisposed;
+
+    private bool _hovering;
+    private DispatcherTimer? _hoverTimer;
+    private int _hoverPolls;
+    private bool _showLyrics = true;
+    /// <summary>整行文本宽度超出视口的像素数；0 表示整句放得下、不需要滚动。</summary>
+    private double _lyricOverflow;
+
+    /// <summary>当前显示的歌词行（取字级时间戳用）；null 表示回落显示歌手。</summary>
+    private LyricLine? _currentLine;
+    /// <summary>与 _currentLine.Chars 一一对应的逐字像素宽度；文本变化时置空重算。</summary>
+    private double[]? _charWidths;
+    /// <summary>最近一次拿到的播放位置。</summary>
+    private TimeSpan _lyricPosition;
+    /// <summary>滚动目标位置（px），由演唱位置决定。</summary>
+    private double _scrollTarget;
+    /// <summary>实际滚动位置（px），按指数缓动逼近目标。</summary>
+    private double _scrollRendered;
+    private DispatcherTimer? _scrollTimer;
+    private DateTime _scrollLastTick = DateTime.UtcNow;
+    private int _marqueeLogTick;
+    /// <summary>逐字测宽缓存：字符 → 像素宽度（照 WaterSprite 的 Map 缓存做法）。</summary>
+    private readonly Dictionary<char, double> _charWidthCache = new();
 
     internal MusicCapsuleWindow(AppSettings settings)
     {
@@ -54,6 +68,13 @@ public partial class MusicCapsuleWindow : Window
         BtnPlay.Click += async (_, _) => { if (_service != null) await _service.TogglePlayPauseAsync(); };
         BtnNext.Click += async (_, _) => { if (_service != null) await _service.SkipNextAsync(); };
 
+        BorderCover.MouseLeftButtonUp += (_, _) => OpenSourceApp();
+        MouseRightButtonUp += OnMouseRightButtonUp;
+        LyricScroller.SizeChanged += (_, _) => UpdateLyricMarquee();
+
+        MouseEnter += (_, _) => { _hovering = true; UpdateControlsVisibility(); };
+        MouseLeave += (_, _) => { _hovering = false; UpdateControlsVisibility(); };
+
         SourceInitialized += OnSourceInitialized;
         Closed += (_, _) =>
         {
@@ -61,9 +82,13 @@ public partial class MusicCapsuleWindow : Window
             StopPositionTimer();
             StopZGuard();
             StopFollowTimer();
+            StopHoverTimer();
+            StopScrollTimer();
             if (_service != null)
             {
                 _service.MediaInfoChanged -= OnMediaInfoChanged;
+                _service.LyricUpdated -= OnLyricUpdated;
+                _service.LyricTick -= OnLyricTick;
                 _service = null;
             }
         };
@@ -71,6 +96,9 @@ public partial class MusicCapsuleWindow : Window
         ApplyTone();
         StartZGuard();
         StartFollowTimer();
+        StartHoverTimer();
+        StartScrollTimer();
+        UpdateControlsVisibility();
     }
 
     internal void AttachService(MediaSessionService? service)
@@ -78,6 +106,8 @@ public partial class MusicCapsuleWindow : Window
         if (_service is not null)
         {
             _service.MediaInfoChanged -= OnMediaInfoChanged;
+            _service.LyricUpdated -= OnLyricUpdated;
+            _service.LyricTick -= OnLyricTick;
         }
 
         _service = service;
@@ -85,6 +115,8 @@ public partial class MusicCapsuleWindow : Window
         if (_service is not null)
         {
             _service.MediaInfoChanged += OnMediaInfoChanged;
+            _service.LyricUpdated += OnLyricUpdated;
+            _service.LyricTick += OnLyricTick;
         }
         else
         {
@@ -104,7 +136,6 @@ public partial class MusicCapsuleWindow : Window
         AcrylicWindowHelper.RemoveWindowBorder(this);
         AcrylicWindowHelper.MakeNoActivate(this);
 
-        // 让 WPF 不再绘制不透明底，背景交给 DWM 亚克力渲染
         var src = HwndSource.FromHwnd(hwnd);
         if (src?.CompositionTarget is not null)
         {
@@ -113,6 +144,27 @@ public partial class MusicCapsuleWindow : Window
 
         ApplyAccent();
         AcrylicWindowHelper.BindToTaskbarLayer(this);
+    }
+
+    /// <summary>
+    /// 拼第一行「歌名 - 歌手」。
+    ///
+    /// 两个必须挡掉的边界：
+    /// ① 播放器没给歌手时 MediaSessionService 会填占位符「未知歌手」，拼上去就是
+    ///    「某某 - 未知歌手」，比不拼更糟。所以占位符一律当没有。
+    /// ② 很多播放器（尤其 QQ 音乐的部分音源）把歌手直接写进 Title，
+    ///    「告白气球 - 周杰伦」这种再拼一次就变「告白气球 - 周杰伦 - 周杰伦」。
+    ///    标题里已经能查到歌手名就不再追加。
+    /// </summary>
+    private static string BuildTitleLine(string? title, string? artist)
+    {
+        string name = string.IsNullOrWhiteSpace(title) ? "未知曲目" : title.Trim();
+
+        string who = string.IsNullOrWhiteSpace(artist) ? "" : artist.Trim();
+        if (who.Length == 0 || who == "未知歌手") return name;
+        if (name.Contains(who, StringComparison.OrdinalIgnoreCase)) return name;
+
+        return $"{name} - {who}";
     }
 
     private void OnMediaInfoChanged(MediaTrackInfo? info)
@@ -137,8 +189,10 @@ public partial class MusicCapsuleWindow : Window
             return;
         }
 
-        TxtTitle.Text = info!.Title;
-        TxtArtist.Text = info.Artist;
+        // 第一行显示「歌名 - 歌手」，是辅助信息；第二行歌词才是主角。
+        TxtTitle.Text = BuildTitleLine(info!.Title, info.Artist);
+        _currentLine = null; // 新曲目还没拿到歌词行，先回落显示歌手
+        SetLyricText(info.Artist);
         ImgCover.Source = info.Thumbnail;
         TxtNoCover.Visibility = info.Thumbnail is null ? Visibility.Visible : Visibility.Collapsed;
 
@@ -150,21 +204,59 @@ public partial class MusicCapsuleWindow : Window
         BtnNext.IsEnabled = info.CanSkipNext;
         BtnPlay.IsEnabled = info.CanPlayPause;
 
-        PanelControls.Visibility = _settings.MusicCapsuleShowControls
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        string friendlySource = string.IsNullOrEmpty(info.FriendlyAppName) ? info.AppId : info.FriendlyAppName;
+        RootBorder.ToolTip = $"{info.Title}\n{info.Artist}\n来源：{friendlySource}";
+        BorderCover.ToolTip = $"点击打开/唤醒 {friendlySource}";
+
+        // 不要在这里直接设成 Visible：那会无视 _hovering，导致切歌后控件常显，
+        // 直到鼠标再进出胶囊一次才恢复。统一交给 UpdateControlsVisibility 裁决。
+        UpdateControlsVisibility();
 
         _wantVisible = true;
         StartPositionTimer();
         UpdateVisibility();
     }
 
-    /// <summary>设置里改动音乐胶囊开关 / 控制键后，立即按新配置重算显示状态。</summary>
+    private void OnLyricUpdated(string? lyric)
+    {
+        if (_isDisposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnLyricUpdated(lyric)));
+            return;
+        }
+        if (_isDisposed || _current == null) return;
+
+        SetLyricText(_showLyrics && !string.IsNullOrWhiteSpace(lyric) ? lyric : _current.Artist);
+    }
+
+    /// <summary>
+    /// 切换歌词文本。双层 TextBlock 必须同时改：底层是整句底色，上层靠 Width 裁出已唱部分。
+    /// </summary>
+    private void SetLyricText(string text)
+    {
+        if (_isDisposed) return;
+        if (TxtArtist.Text == text && TxtLyricPlayed.Text == text) return;
+
+        TxtArtist.Text = text;
+        TxtLyricPlayed.Text = text;
+
+        // 文本变了，逐字宽度作废；滚动也回到句首，避免带着上一句的偏移闪一下。
+        _charWidths = null;
+        _scrollTarget = 0;
+        _scrollRendered = 0;
+        LyricScroller.ScrollToHorizontalOffset(0);
+        TxtLyricPlayed.Width = 0;
+        // 清掉上一句的显式宽度，让 UpdateLyricMarquee 按新文本重新排版。
+        TxtArtist.Width = double.NaN;
+
+        Dispatcher.BeginInvoke(new Action(UpdateLyricMarquee), DispatcherPriority.Loaded);
+    }
+
     internal void RefreshFromSettings()
     {
-        PanelControls.Visibility = _settings.MusicCapsuleShowControls
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        ApplyCapsuleWidth();
+        UpdateControlsVisibility();
 
         if (!_settings.MusicCapsuleEnabled || _current is null)
         {
@@ -177,9 +269,264 @@ public partial class MusicCapsuleWindow : Window
         _wantVisible = true;
         StartPositionTimer();
         UpdateVisibility();
+        UpdateLyricMarquee();
     }
 
-    /// <summary>任务栏风格 / 亚克力色调变化后重新套用胶囊背景。</summary>
+    /// <summary>把设置里的胶囊宽度应用到窗口；定位计算直接读 Width，所以改这里就够了。</summary>
+    private void ApplyCapsuleWidth()
+    {
+        int raw = _settings.MusicCapsuleWidth;
+        if (raw <= 0) raw = 250;
+        double target = Math.Clamp(raw, 200, 520);
+
+        if (Math.Abs(Width - target) > 0.5)
+        {
+            Width = target;
+            Services.Log.Debug($"capsule width applied: {target}");
+        }
+    }
+
+    /// <summary>播放控件默认收起，鼠标移入胶囊才显示；设置里关掉则永不显示。</summary>
+    private void UpdateControlsVisibility()
+    {
+        bool show = _settings.MusicCapsuleShowControls && _hovering;
+        var target = show ? Visibility.Visible : Visibility.Collapsed;
+        if (ControlsBackdrop.Visibility == target) return;
+
+        ControlsBackdrop.Visibility = target;
+        Services.Log.Debug($"capsule controls -> {target} (hovering={_hovering}, enabled={_settings.MusicCapsuleShowControls})");
+        // 控件是浮层、不占用布局宽度，歌词视口不随悬停变化；这里只让跑马灯按新状态复核一次。
+        Dispatcher.BeginInvoke(new Action(UpdateLyricMarquee), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// 量一次当前歌词的逐字宽度，算出整行宽度与溢出量。
+    /// 逐字宽度同时供「已唱高亮」和「滚动锚点」使用（照 WaterSprite 的 getTextWidth + highlightedWidth）。
+    /// </summary>
+    private void UpdateLyricMarquee()
+    {
+        _lyricOverflow = 0;
+        _scrollTarget = 0;
+
+        if (_isDisposed || !_showLyrics) return;
+
+        string text = TxtArtist.Text ?? string.Empty;
+        if (text.Length == 0) return;
+
+        var widths = MeasureCharWidths(text);
+        double measured = 0;
+        for (int i = 0; i < widths.Length; i++) measured += widths[i];
+
+        // 关键：TextBlock 不设 Width，交给 ScrollViewer 做无限宽度测量，
+        // extent 才是真正的自然排版宽度。之前用自己量的宽度去写 TxtArtist.Width，
+        // 等于把错误的测量值变成了 extent，ScrollableWidth 随之偏小，末字永远滚不出来。
+        if (!double.IsNaN(TxtArtist.Width)) TxtArtist.Width = double.NaN;
+        TxtArtist.UpdateLayout();
+
+        double viewport = LyricScroller.ViewportWidth;
+        if (viewport <= 16 || double.IsNaN(viewport)) return; // 布局还没完成，等 SizeChanged 再来
+
+        double extent = LyricScroller.ExtentWidth;
+        if (double.IsNaN(extent) || extent <= 0) extent = measured;
+
+        // 逐字宽度按「真实 extent / 测量累加值」等比缩放，让高亮像素和实际渲染对齐。
+        if (measured > 0.01 && Math.Abs(extent - measured) > 0.5)
+        {
+            double scale = extent / measured;
+            for (int i = 0; i < widths.Length; i++) widths[i] *= scale;
+        }
+
+        // 只有文本确实对应这一行歌词时才缓存，否则逐字宽度和 Chars 的下标对不上。
+        _charWidths = _currentLine is not null && _currentLine.Text == text ? widths : null;
+
+        // 关键：滚动上限由 WPF 布局引擎给出（= 内容宽 - 视口宽），不再由代码估算，
+        // 所以即使逐字测宽有偏差，末字也一定能滚出来。对应 WaterSprite 里浏览器保证的
+        // scrollLeft 最大值 scrollWidth - clientWidth。
+        double scrollable = LyricScroller.ScrollableWidth;
+        if (double.IsNaN(scrollable) || scrollable < 0) scrollable = 0;
+
+        if (scrollable <= 0.5)
+        {
+            // 整句放得下：不需要滚动，但逐字高亮照常（宽度由 UpdatePlayedHighlight 设）。
+            if (LyricScroller.HorizontalOffset > 0.01) LyricScroller.ScrollToHorizontalOffset(0);
+            return;
+        }
+
+        _lyricOverflow = scrollable;
+        Services.Log.Debug($"marquee: viewport={viewport:F1} extent={extent:F1} measured={measured:F1} scrollable={scrollable:F1} chars={_charWidths?.Length ?? -1} line='{text}'");
+    }
+
+    /// <summary>
+    /// 逐字测宽（照 WaterSprite 的 getTextWidth）：每个字符单独量一遍并缓存。
+    /// 中英混排时整行宽度不能靠等宽假设，必须逐字累加。
+    /// </summary>
+    private double[] MeasureCharWidths(string text)
+    {
+        var widths = new double[text.Length];
+        var typeface = new System.Windows.Media.Typeface(
+            TxtArtist.FontFamily, TxtArtist.FontStyle, TxtArtist.FontWeight, TxtArtist.FontStretch);
+        double pixelsPerDip = System.Windows.Media.VisualTreeHelper.GetDpi(this).PixelsPerDip;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (_charWidthCache.TryGetValue(c, out double cached))
+            {
+                widths[i] = cached;
+                continue;
+            }
+
+            var ft = new System.Windows.Media.FormattedText(
+                c.ToString(),
+                System.Globalization.CultureInfo.CurrentUICulture,
+                System.Windows.FlowDirection.LeftToRight,
+                typeface,
+                TxtArtist.FontSize,
+                System.Windows.Media.Brushes.White,
+                pixelsPerDip);
+
+            widths[i] = ft.WidthIncludingTrailingWhitespace;
+            _charWidthCache[c] = widths[i];
+        }
+
+        return widths;
+    }
+
+    private void OnLyricTick(LyricLine? line, TimeSpan position)
+    {
+        if (_isDisposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnLyricTick(line, position)));
+            return;
+        }
+
+        if (!ReferenceEquals(_currentLine, line))
+        {
+            _currentLine = line;
+            _charWidths = null; // 换行了，逐字宽度要按新文本重算
+            _scrollTarget = 0;
+            _scrollRendered = 0;
+            LyricScroller.ScrollToHorizontalOffset(0);
+            TxtLyricPlayed.Width = 0;
+            Dispatcher.BeginInvoke(new Action(UpdateLyricMarquee), DispatcherPriority.Loaded);
+        }
+
+        _lyricPosition = position;
+        UpdatePlayedHighlight(line, position);
+        UpdateScrollTarget(line, position);
+    }
+
+    /// <summary>
+    /// 把上层 TextBlock 的宽度设成「已唱像素宽度」——露出多少字由它决定，
+    /// 这就是逐字高亮（对应 WaterSprite 的 lyric--played）。
+    /// </summary>
+    private void UpdatePlayedHighlight(LyricLine? line, TimeSpan position)
+    {
+        if (line is null) return;
+
+        // 行级 LRC 没有字级时间：唱到就整行点亮。
+        // 注意：这里必须设成文本的自然宽度（而不是 NaN），因为 NaN 会让 TextBlock
+        // 回落到父容器约束的 164px，整句只有前 164px 能被点亮。
+        if (line.IsLineLevel || _charWidths is null)
+        {
+            TxtLyricPlayed.Width = double.IsNaN(TxtArtist.Width) ? double.NaN : TxtArtist.Width;
+            return;
+        }
+
+        double played = line.GetPlayedWidth(_charWidths, position);
+        TxtLyricPlayed.Width = Math.Max(0, played);
+
+        _marqueeLogTick++;
+        if (_marqueeLogTick % 40 == 0)
+        {
+            Services.Log.Debug($"lyric highlight: pos={position.TotalSeconds:F2}s played={played:F1} chars={_charWidths.Length} line='{line.Text}'");
+        }
+    }
+
+    /// <summary>
+    /// 算出滚动目标位置（照 WaterSprite 的滚动逻辑）：行级 LRC 用线性比例
+    /// （提前 800ms 起步、提前 800ms 到位）；逐字歌词则跟住已唱位置，
+    /// 只有当锚点跑出视口左侧、或越过右侧 90% 时才跳到「锚点 - 视口 10%」。
+    /// </summary>
+    private void UpdateScrollTarget(LyricLine? line, TimeSpan position)
+    {
+        double viewport = LyricScroller.ViewportWidth;
+        if (viewport <= 16 || double.IsNaN(viewport)) return;
+
+        double max = _lyricOverflow;
+        if (max <= 0 || line is null)
+        {
+            _scrollTarget = 0;
+            return;
+        }
+
+        if (line.IsLineLevel)
+        {
+            double lineStart = line.Time.TotalMilliseconds;
+            double span = Math.Max(1000, (line.End - line.Time).TotalMilliseconds - 1600);
+            double fraction = Math.Clamp((position.TotalMilliseconds - lineStart - 800) / span, 0, 1);
+            _scrollTarget = max * fraction;
+            return;
+        }
+
+        double anchor = _charWidths is null ? 0 : line.GetPlayedWidth(_charWidths, position);
+        _scrollTarget = anchor < _scrollRendered || anchor - _scrollRendered > viewport * 0.9
+            ? Math.Clamp(anchor - viewport * 0.1, 0, max)
+            : Math.Clamp(_scrollTarget, 0, max);
+    }
+
+    private void StartScrollTimer()
+    {
+        if (_scrollTimer is not null) return;
+        _scrollLastTick = DateTime.UtcNow;
+        _scrollTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _scrollTimer.Tick += (_, _) => OnScrollTick();
+        _scrollTimer.Start();
+    }
+
+    private void StopScrollTimer()
+    {
+        if (_scrollTimer is null) return;
+        _scrollTimer.Stop();
+        _scrollTimer = null;
+    }
+
+    /// <summary>
+    /// 每帧把实际滚动位置按指数缓动逼近目标（时间常数 200ms）——与 WaterSprite 的
+    /// `difference * (1 - Math.exp(-5 * delta / 1000))` 一致，避免进度跳变时画面抽搐。
+    /// </summary>
+    private void OnScrollTick()
+    {
+        if (_isDisposed) return;
+
+        var now = DateTime.UtcNow;
+        double dt = (now - _scrollLastTick).TotalMilliseconds;
+        _scrollLastTick = now;
+        if (dt <= 0 || dt > 500) dt = 16;
+
+        double difference = _scrollTarget - _scrollRendered;
+        _scrollRendered = Math.Abs(difference) < 0.5
+            ? _scrollTarget
+            : _scrollRendered + difference * (1 - Math.Exp(-5 * dt / 1000));
+
+        // 交给 ScrollViewer 自己钳位：超出 ScrollableWidth 的偏移会被它自动收回到最大值，
+        // 这就是 WaterSprite 依赖浏览器 scrollLeft 行为的等价物。
+        if (Math.Abs(LyricScroller.HorizontalOffset - _scrollRendered) >= 0.5)
+        {
+            LyricScroller.ScrollToHorizontalOffset(_scrollRendered);
+        }
+
+        _marqueeLogTick++;
+        if (_marqueeLogTick % 60 == 0)
+        {
+            Services.Log.Debug($"marquee tick: pos={_lyricPosition.TotalSeconds:F1}s target={_scrollTarget:F1} rendered={_scrollRendered:F1} offset={LyricScroller.HorizontalOffset:F1} scrollable={LyricScroller.ScrollableWidth:F1}");
+        }
+    }
+
     internal void RefreshBackground()
     {
         ApplyTone();
@@ -187,34 +534,47 @@ public partial class MusicCapsuleWindow : Window
 
     private void ApplyTone()
     {
-        // 背景由系统 DWM 亚克力负责，上层画刷保持透明，只留细边框
         RootBorder.Background = System.Windows.Media.Brushes.Transparent;
+        ApplyToneBorder();
         ApplyAccent();
     }
 
-    /// <summary>应用系统亚克力模糊，使胶囊与任务栏浮岛质感一致。</summary>
+    /// <summary>
+    /// 描边与悬停/按下色阶按当前 tone 重写进窗口资源。
+    /// XAML 里用 DynamicResource 引用，换画刷即时生效，不必重建 ControlTemplate。
+    /// 浅色柔雾用黑色系压边、深色黑丝用白色系提边 —— 同一条边不可能两种底色下都好看。
+    /// </summary>
+    private void ApplyToneBorder()
+    {
+        try
+        {
+            var tone = _settings.EffectiveTone;
+            Resources["CapsuleBorderBrush"] = TonePalette.BorderBrush(tone);
+            Resources["CapsuleHoverBrush"] = TonePalette.HoverBrush(tone);
+            Resources["CapsulePressedBrush"] = TonePalette.PressedBrush(tone);
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Debug($"ApplyToneBorder failed: {ex.Message}");
+        }
+    }
+
     private void ApplyAccent()
     {
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
 
-        // 先关掉 Win11 系统背景材质：它按"应用主题"渲染，浅色主题下会糊上一块奶白，
-        // 与任务栏实际使用的 natural 透壁纸色调对不上。
-        int backdropNone = 1;   // DWMSBT_NONE
+        int backdropNone = 1;
         try { DwmSetWindowAttribute(hwnd, 38, ref backdropNone, sizeof(int)); } catch { }
 
-        // 与任务栏共用同一套色调常量，保证两处色调永远同步
-        var tone = (_settings.AcrylicTone ?? "natural").ToLowerInvariant();
+        var tone = (_settings.EffectiveTone ?? "natural").ToLowerInvariant();
         uint gradient = NativeTaskbarAppearanceService.GetColorForTone(tone);
 
-        // 胶囊永远保留自己那圈细边框：要的是「各自一个细边框」，
-        // 而不是把胶囊和托盘描边合成一个整体。
         RootBorder.BorderThickness = new System.Windows.Thickness(1);
-
+        
+        // 此处调用与 AcrylicWindowHelper 保持一致逻辑，保持浮岛磨砂质感
         var accent = new AccentPolicy
         {
-            // 整条模式下它就盖在任务栏自己的底上，不能再糊一层，
-            // 否则连接处会显出「两块不同材质」，也就是用户说的「漏到背景」。
             AccentState = TaskbarService.IsIslandActive ? 4 : 0,
             AccentFlags = 0,
             GradientColor = gradient,
@@ -228,7 +588,7 @@ public partial class MusicCapsuleWindow : Window
             Marshal.StructureToPtr(accent, ptr, false);
             var data = new WindowCompositionAttributeData
             {
-                Attribute = 19,   // WCA_ACCENT_POLICY
+                Attribute = 19,
                 Data = ptr,
                 SizeOfData = size
             };
@@ -245,7 +605,6 @@ public partial class MusicCapsuleWindow : Window
             Marshal.FreeHGlobal(ptr);
         }
 
-        // 让 DWM 背景材质铺满整个客户区
         var margins = new MARGINS { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
         DwmExtendFrameIntoClientArea(hwnd, ref margins);
     }
@@ -268,7 +627,6 @@ public partial class MusicCapsuleWindow : Window
         _posTimer = null;
     }
 
-    /// <summary>16ms 的 z 序守卫：整条模式下胶囊没有独立磨砂面，被任务栏压住就会「看不见」，必须立刻抬回来。</summary>
     private void StartZGuard()
     {
         if (_zGuard is not null) return;
@@ -290,10 +648,6 @@ public partial class MusicCapsuleWindow : Window
         _zGuard = null;
     }
 
-    /// <summary>
-    /// 50ms 一轮只做「跟随」：读实时托盘区左缘重算 x/y，位置没变就直接返回。
-    /// 与 UpdateVisibility 分开，是为了不让高频跟随去反复触发显隐判定与淡入淡出。
-    /// </summary>
     private void StartFollowTimer()
     {
         if (_followTimer is not null) return;
@@ -315,7 +669,59 @@ public partial class MusicCapsuleWindow : Window
         _followTimer = null;
     }
 
-    /// <summary>统一的可见性状态机：媒体会话是否要显示 + 当前是否该让位，两者共同决定。</summary>
+    private void StartHoverTimer()
+    {
+        if (_hoverTimer is not null) return;
+        _hoverTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _hoverTimer.Tick += (_, _) => PollHover();
+        _hoverTimer.Start();
+    }
+
+    private void StopHoverTimer()
+    {
+        if (_hoverTimer is null) return;
+        _hoverTimer.Stop();
+        _hoverTimer = null;
+    }
+
+    /// <summary>
+    /// 这个窗口不可激活（WS_EX_NOACTIVATE + ShowActivated=false），WPF 的
+    /// MouseEnter / MouseLeave 收不到可靠的进出通知，表现为移开鼠标后控件不消失。
+    /// 因此改用轮询：直接比较光标屏幕坐标与窗口屏幕矩形，作为 _hovering 的唯一真值来源。
+    /// </summary>
+    private void PollHover()
+    {
+        if (_isDisposed) return;
+        _hoverPolls++;
+        try
+        {
+            if (!NativeMethods.GetCursorPos(out var pt)) return;
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            if (!NativeMethods.GetWindowRect(hwnd, out var r)) return;
+
+            bool inside = pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom;
+            if (_hoverPolls <= 3 || inside != _hovering)
+            {
+                Services.Log.Debug(
+                    $"capsule hover #{_hoverPolls}: cursor=({pt.x},{pt.y}) rect=({r.left},{r.top},{r.right},{r.bottom}) inside={inside} hovering={_hovering}");
+            }
+
+            _hovering = inside;
+
+            // 每次都重新裁决（UpdateControlsVisibility 内部自带早退）。不能只在
+            // inside 发生变化时才调用：切歌等路径可能绕过 _hovering 改动过 Visibility。
+            UpdateControlsVisibility();
+        }
+        catch (Exception ex)
+        {
+            if (_hoverPolls <= 5) Services.Log.Warn($"capsule hover poll failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     private void UpdateVisibility()
     {
         if (!_wantVisible)
@@ -326,8 +732,6 @@ public partial class MusicCapsuleWindow : Window
 
         if (_isDisposed) return;
 
-        // 窗口句柄还没创建时，先以全透明 Show 出来拿到句柄；位置与让位判断
-        // 交给下一轮定时器（400ms）校正，避免带着错误位置闪一下。
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero)
         {
@@ -346,8 +750,6 @@ public partial class MusicCapsuleWindow : Window
             if (hwnd == IntPtr.Zero) return;
         }
 
-        // 任务栏本身没了（自动隐藏把它推出屏幕 / 锁屏）才让位。判定必须连续几轮成立，
-        // 否则拖拽托盘图标时 explorer 重排任务栏造成的一次瞬时零矩形就会让胶囊整块消失。
         if (ShouldHideForTaskbar())
         {
             if (_shown) HideCapsule();
@@ -362,7 +764,7 @@ public partial class MusicCapsuleWindow : Window
     {
         if (_isDisposed) return;
         _shown = true;
-        _lastX = int.MinValue;   // 重新显示时强制做一次定位
+        _lastX = int.MinValue;
         bool wasVisible = IsVisible;
         if (!wasVisible) Show();
 
@@ -396,29 +798,18 @@ public partial class MusicCapsuleWindow : Window
         RootBorder.BeginAnimation(UIElement.OpacityProperty, anim);
     }
 
-    /// <summary>把胶囊停靠到托盘浮岛左边缘左侧。</summary>
     private void RepositionWindow()
     {
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
 
-        // 任务栏被收起时胶囊必须一起让位，否则它作为独立顶层窗口会一直浮在桌面之上。
-        // 让位判定已在 UpdateVisibility 里统一做过去抖，这里复用的是同一个计数器。
         if (ShouldHideForTaskbar())
         {
             if (_shown) HideCapsule();
             return;
         }
 
-        // 优先使用实时托盘区左缘：托盘图标一被拖出就立刻跟着走。
-        // 之前这里先走 TryGetTrayIslandAnchor 的缓存锚点，而锚点只在 ApplyRegionImmediate
-        // 被调用时才刷新，几何收敛后 OnAnimTick 提前 return、锚点就停在那里不动了 ——
-        // 表现为「图标从托盘取出后胶囊不跟着移动」。
         bool realtime = TaskbarService.TryGetTrayLeftRealtime(out int rtLeft, out int rtTop, out int rtHeight);
-
-        // 浮岛模式下的锚点仍然保留，作为实时读取失败时的后备。
-        // 不能写成 `!realtime && TryGetTrayIslandAnchor(out ...)`：短路求值会让 out 变量
-        // 在 realtime 为 true 时处于「未赋值」状态，编译器直接报 CS0165。
         int anchorLeft = 0, anchorTop = 0, taskbarHeight = 0;
         bool anchored = false;
         if (!realtime)
@@ -442,24 +833,18 @@ public partial class MusicCapsuleWindow : Window
         }
         else if (anchored)
         {
-            // 胶囊高度不得超出任务栏，否则居中后会上下溢出，看起来"悬浮在桌面上"
             if (taskbarHeight > 0 && h > taskbarHeight) h = taskbarHeight;
             x = anchorLeft - GapToTrayPx - w;
             y = anchorTop + (taskbarHeight - h) / 2;
         }
         else if (TaskbarService.TryGetIslandRectsOnScreen(out _, out _, out int trayLeftScreen, out _, out int tbTop3, out int tbH3))
         {
-            // 整条模式：照样贴着托盘区左缘 —— 与两条描边窗口用的是同一份几何，天然对齐。
-            // 之前这里是 x = 任务栏右缘 - 260 - w 的固定偏移，托盘图标一增减就"不跟随"：
-            // 要么和新出现的托盘图标挤在一起，要么留出一道忽宽忽窄的缝。
             if (tbH3 > 0 && h > tbH3) h = tbH3;
             x = trayLeftScreen - GapToTrayPx - w;
             y = tbTop3 + (tbH3 - h) / 2;
         }
         else if (TaskbarService.TryGetShellTaskbarRect(out _, out int tbTop2, out int tbRight2, out int tbBottom2))
         {
-            // 连托盘区几何都取不到（UIA 与 Win32 都失败）时的兜底：按任务栏窗口矩形贴靠。
-            // 旧写法用工作区底边 +4 推算，胶囊会整体下沉 4px 并溢出任务栏底边。
             int tbH2 = tbBottom2 - tbTop2;
             if (tbH2 > 0 && h > tbH2) h = tbH2;
             x = tbRight2 - 260 - w;
@@ -467,50 +852,29 @@ public partial class MusicCapsuleWindow : Window
         }
         else
         {
-            // 最后兜底：贴合主屏工作区下方任务栏位置
             var wa = SystemParameters.WorkArea;
             x = (int)(wa.Right * dpi) - w - 260;
             y = (int)(wa.Bottom * dpi);
         }
 
-        // 位置和尺寸都没变就不要再下发：原实现每 400ms 无条件
-        // SetWindowPos + SWP_SHOWWINDOW，会让浮岛被反复重绘，
-        // 表现为「点托盘图标时系统信息与音乐组件闪烁」。
         if (x == _lastX && y == _lastY && w == _lastW && h == _lastH) return;
         _lastX = x;
         _lastY = y;
         _lastW = w;
         _lastH = h;
 
-        // 移动时用 SWP_NOZORDER，绝不在这里动 z 序。
-        // 原实现传 TaskbarLayerAnchor() 当 hWndInsertAfter，而它取的是「任务栏正上方那个窗口」——
-        // 那个窗口经常就是我们自己的另一个浮岛（甚至就是本窗口自己）。当锚点等于目标窗口本身
-        // 或已被销毁时，SetWindowPos 会直接失败：位置一动不动，但 _lastX 已经更新过，
-        // 于是再也不会重试 —— 表现就是「把图标从托盘拖出来，胶囊不跟着走」，
-        // 以及拖动过程中成功/失败交替导致的闪烁。z 序统一交给 16ms 的 KeepAboveTaskbar 守卫。
         SetWindowPos(hwnd, IntPtr.Zero, x, y, w, h,
             SWP_NOACTIVATE | SWP_NOZORDER);
 
-        // 胶囊不再给任务栏挖洞：挖了洞就会露出未经模糊的原始壁纸（用户说的「漏到背景」）。
-        // 保持任务栏自己的半透明底，胶囊只画内容 + 一圈细边框。
         TaskbarService.ClearWidgetExclusion("capsule");
     }
 
-    /// <summary>
-    /// 判断胶囊此刻是否应让位隐藏：任务栏窗口不可见、被自动隐藏移出屏幕，
-    /// 或有全屏前台窗口盖住了任务栏。
-    /// </summary>
     private const int SM_CXSCREEN = 0;
     private const int SM_CYSCREEN = 1;
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
-    /// <summary>
-    /// 「任务栏真的没了」才返回 true：必须连续 TaskbarGoneTicksNeeded 轮判定失败。
-    /// 单轮瞬时误判（拖拽托盘图标时 explorer 重排任务栏、GetWindowRect 拿到零矩形）
-    /// 会被忽略，否则胶囊会整块消失再淡入。
-    /// </summary>
     private bool ShouldHideForTaskbar()
     {
         if (!IsTaskbarUnavailable())
@@ -522,7 +886,6 @@ public partial class MusicCapsuleWindow : Window
         return (DateTime.UtcNow - _taskbarGoneSince).TotalMilliseconds >= TaskbarGoneMsNeeded;
     }
 
-    /// <summary>任务栏本身不可用：不存在、不可见、或被自动隐藏推离了屏幕。</summary>
     private static bool IsTaskbarUnavailable()
     {
         try
@@ -539,10 +902,6 @@ public partial class MusicCapsuleWindow : Window
         return false;
     }
 
-
-
-    // ---------------- Win32 ----------------
-
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
@@ -551,6 +910,9 @@ public partial class MusicCapsuleWindow : Window
     private const uint SWP_SHOWWINDOW = 0x0040;
     private const uint SWP_NOOWNERZORDER = 0x0200;
     private const uint SWP_NOZORDER = 0x0004;
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -589,6 +951,237 @@ public partial class MusicCapsuleWindow : Window
         public int AccentFlags;
         public uint GradientColor;
         public int AnimationId;
+    }
+
+    /// <summary>
+    /// 点击封面：把当前媒体来源的播放器窗口带到前台。
+    /// 按 进程名 → UWP/AUMID → Shell 三级回退，覆盖 Win32 播放器与浏览器播放。
+    /// </summary>
+    private void OpenSourceApp()
+    {
+        if (_current == null || string.IsNullOrWhiteSpace(_current.AppId))
+        {
+            Services.Log.Debug("OpenSourceApp: no current session or app id");
+            return;
+        }
+
+        string appId = _current.AppId;
+        try
+        {
+            string? procName = ResolveProcessName(appId);
+            if (procName != null)
+            {
+                // 多进程应用（Chrome/Edge/QQ音乐）逐个 PID 试，挑真正带窗口的那个
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName(procName))
+                {
+                    if (Services.PlayerWindowControl.Window(p.Id) == IntPtr.Zero) continue;
+
+                    if (Services.PlayerWindowControl.Open(p.Id))
+                    {
+                        Services.Log.Debug($"OpenSourceApp: activated '{procName}' pid={p.Id} {Services.PlayerWindowControl.LastDiagnostic}");
+                        return;
+                    }
+
+                    Services.Log.Debug($"OpenSourceApp: Open pid={p.Id} failed {Services.PlayerWindowControl.LastDiagnostic}");
+                }
+
+                Services.Log.Debug($"OpenSourceApp: no activatable window for '{procName}'");
+            }
+
+            // 回退 1：UWP / 打包应用，AppId 形如 PackageFamilyName!AppId
+            if (appId.Contains('!') || (appId.Contains('_') && appId.Contains('.')))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"shell:appsFolder\\{appId}",
+                    UseShellExecute = true
+                });
+                Services.Log.Debug($"OpenSourceApp: launched AUMID via shell:appsFolder -> {appId}");
+                return;
+            }
+
+            // 回退 2：Shell 打开可执行文件路径
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = appId,
+                UseShellExecute = true
+            });
+            Services.Log.Debug($"OpenSourceApp: shell-launched '{appId}'");
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Warn($"OpenSourceApp failed for '{appId}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 把 GSMTC 的 SourceAppUserModelId 映射为进程名；返回 null 表示无法按进程名定位。
+    /// 浏览器给的是 "Chrome" / "Microsoft.Edge" / "Mozilla.Firefox" 这类标识，
+    /// 而非 "Microsoft.Edge" 会被 GetFileNameWithoutExtension 误当成扩展名取出 "Microsoft"。
+    /// </summary>
+    private static string? ResolveProcessName(string appId)
+    {
+        if (appId.Contains("Edge", StringComparison.OrdinalIgnoreCase)) return "msedge";
+        if (appId.Contains("Chrome", StringComparison.OrdinalIgnoreCase)) return "chrome";
+        if (appId.Contains("Firefox", StringComparison.OrdinalIgnoreCase)) return "firefox";
+        if (appId.Contains("Brave", StringComparison.OrdinalIgnoreCase)) return "brave";
+        if (appId.Contains("Opera", StringComparison.OrdinalIgnoreCase)) return "opera";
+
+        string name = System.IO.Path.GetFileNameWithoutExtension(appId);
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        // "Microsoft.ZuneMusic" 之类会退化成无意义前缀（含点号且不像可执行名）
+        if (!appId.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && appId.Contains('.')) return null;
+
+        return name;
+    }
+
+    private void OnMouseRightButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var menu = new System.Windows.Controls.ContextMenu();
+
+        if (_current != null)
+        {
+            string friendly = string.IsNullOrEmpty(_current.FriendlyAppName) ? _current.AppId : _current.FriendlyAppName;
+            var openItem = new System.Windows.Controls.MenuItem
+            {
+                Header = $"打开 {friendly}"
+            };
+            openItem.Click += (_, _) => OpenSourceApp();
+            menu.Items.Add(openItem);
+
+            var copyItem = new System.Windows.Controls.MenuItem
+            {
+                Header = "复制歌曲信息"
+            };
+            copyItem.Click += (_, _) =>
+            {
+                try
+                {
+                    System.Windows.Clipboard.SetText($"{_current.Title} - {_current.Artist}");
+                }
+                catch { }
+            };
+            menu.Items.Add(copyItem);
+
+            var lyricItem = new System.Windows.Controls.MenuItem
+            {
+                Header = "显示实时歌词",
+                IsCheckable = true,
+                IsChecked = _showLyrics
+            };
+            lyricItem.Click += (_, _) =>
+            {
+                _showLyrics = !_showLyrics;
+                if (!_showLyrics)
+                {
+                    _currentLine = null;
+                    if (_current != null) SetLyricText(_current.Artist);
+                }
+                else if (!string.IsNullOrWhiteSpace(_service?.CurrentLyric))
+                {
+                    // 行对象由下一次 LyricTick 补上，这里先把文本切过去。
+                    SetLyricText(_service!.CurrentLyric!);
+                }
+                UpdateLyricMarquee();
+            };
+            menu.Items.Add(lyricItem);
+
+            menu.Items.Add(new System.Windows.Controls.Separator());
+        }
+
+        var sourceItem = new System.Windows.Controls.MenuItem { Header = "媒体来源" };
+
+        var sources = _service?.GetAvailableSources() ?? Array.Empty<string>();
+
+        // 「自动选择」何时算选中：没有固定来源时选中；固定来源已经关掉（不在当前列表里）时，
+        // 实际生效的也是自动选择，所以同样打勾。否则会出现「固定项没打勾、自动项也没打勾」
+        // 这种看不出当前到底在跟谁的空白状态。
+        string? pinned = _service?.PinnedAppId;
+        bool pinnedPresent = !string.IsNullOrEmpty(pinned)
+            && sources.Any(s => string.Equals(s, pinned, StringComparison.OrdinalIgnoreCase));
+
+        var autoItem = new System.Windows.Controls.MenuItem
+        {
+            Header = pinnedPresent ? "自动选择" : "自动选择（当前生效）",
+            IsChecked = !pinnedPresent
+        };
+        autoItem.Click += (_, _) => _service?.PinSource(null);
+        sourceItem.Items.Add(autoItem);
+        sourceItem.Items.Add(new System.Windows.Controls.Separator());
+
+        if (sources.Count == 0)
+        {
+            sourceItem.Items.Add(new System.Windows.Controls.MenuItem
+            {
+                Header = _service == null ? "（音乐胶囊未启用）" : "（当前没有可接管的播放器）",
+                IsEnabled = false
+            });
+        }
+
+        foreach (var src in sources)
+        {
+            string friendly = MediaSessionService.GetFriendlySourceName(src);
+            // 标出来源类型，用户才能理解自动选择为什么会挑中它（音乐 3 > 浏览器 2 > 视频 1）。
+            string kind = MediaSourceRouter.DescribeKind(src);
+            string headerText = friendly != src ? $"{friendly} ({src})" : src;
+            if (kind.Length > 0) headerText = $"{headerText}  ·{kind}";
+
+            var item = new System.Windows.Controls.MenuItem
+            {
+                Header = headerText,
+                IsChecked = string.Equals(pinned, src, StringComparison.OrdinalIgnoreCase),
+                ToolTip = string.Equals(pinned, src, StringComparison.OrdinalIgnoreCase)
+                    ? "当前已手动固定到此来源，点一下可取消固定"
+                    : $"固定到此来源（{src}）"
+            };
+            item.Click += (_, _) => _service?.PinSource(src);
+            sourceItem.Items.Add(item);
+        }
+
+        menu.Items.Add(sourceItem);
+
+        menu.Items.Add(new System.Windows.Controls.Separator());
+        var settingsItem = new System.Windows.Controls.MenuItem { Header = "打开设置…" };
+        settingsItem.Click += (_, _) =>
+        {
+            try
+            {
+                (System.Windows.Application.Current as App)?.ShowSettingsWindow();
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Debug($"capsule: open settings failed: {ex.Message}");
+            }
+        };
+        menu.Items.Add(settingsItem);
+
+        // 本窗口带 WS_EX_NOACTIVATE，WPF 的 ContextMenu 收不到「点击菜单外」的关闭通知
+        // （它依赖窗口激活状态或 Popup 的鼠标捕获），表现为只有点回胶囊内部菜单才消失。
+        // 对策：菜单打开期间临时摘掉 NOACTIVATE 并把前台抢过来，关闭后原样还原并交还前台。
+        IntPtr capsuleHwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        long originalExStyle = GetWindowLongPtr(capsuleHwnd, GWL_EXSTYLE).ToInt64();
+        SetWindowLongPtr(capsuleHwnd, GWL_EXSTYLE, (IntPtr)(originalExStyle & ~WS_EX_NOACTIVATE));
+        bool gotForeground = Services.PlayerWindowControl.ActivateWindow(capsuleHwnd);
+        Services.Log.Debug($"capsule menu opening: hwnd=0x{capsuleHwnd.ToInt64():X} foreground={gotForeground}");
+
+        menu.Closed += (_, _) =>
+        {
+            try
+            {
+                SetWindowLongPtr(capsuleHwnd, GWL_EXSTYLE, (IntPtr)originalExStyle);
+                // Win32 弹出菜单的标准收尾：投递 WM_NULL，把前台队列交还回去。
+                Interop.NativeMethods.PostMessageW(capsuleHwnd, 0x0000, IntPtr.Zero, IntPtr.Zero);
+                Services.Log.Debug("capsule menu closed: NOACTIVATE restored");
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Warn($"capsule menu close cleanup failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        };
+
+        menu.IsOpen = true;
     }
 
     [StructLayout(LayoutKind.Sequential)]

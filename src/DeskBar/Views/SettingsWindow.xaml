@@ -1,13 +1,13 @@
 <Window x:Class="DeskBar.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="DeskBar 设置" Height="660" Width="900"
-        MinHeight="560" MinWidth="800"
+        Title="DeskBar 设置" Height="700" Width="920"
+        MinHeight="580" MinWidth="820"
         Icon="pack://application:,,,/DeskBar;component/app.ico"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource WindowBackground}"
         Foreground="{DynamicResource ForegroundBrush}"
-        FontFamily="Microsoft YaHei UI" FontSize="13"
+        FontFamily="{DynamicResource FontFamilyBase}" FontSize="{DynamicResource FontSizeBody}"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
     <Window.Resources>
 
@@ -18,7 +18,7 @@
         <!--  卡片  -->
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBackground}" />
-            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="CornerRadius" Value="{DynamicResource RadiusShell}" />
             <Setter Property="Padding" Value="16,13" />
             <Setter Property="Margin" Value="0,0,0,12" />
         </Style>
@@ -26,7 +26,7 @@
         <Style x:Key="GroupTitle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource SubTextBrush}" />
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Margin" Value="3,2,0,8" />
+            <Setter Property="Margin" Value="3,4,0,8" />
         </Style>
 
         <Style x:Key="RowTitle" TargetType="TextBlock">
@@ -41,6 +41,22 @@
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
 
+        <!--  提示 / 警告文案  -->
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource SubTextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,6,0,0" />
+        </Style>
+
+        <Style x:Key="WarnHint" TargetType="TextBlock" BasedOn="{StaticResource Hint}">
+            <Setter Property="Foreground" Value="#E0A030" />
+        </Style>
+
+        <Style x:Key="BadHint" TargetType="TextBlock" BasedOn="{StaticResource Hint}">
+            <Setter Property="Foreground" Value="#E05252" />
+        </Style>
+
         <!--  开关  -->
         <Style x:Key="ToggleSwitch" TargetType="CheckBox">
             <Setter Property="Width" Value="42" />
@@ -51,7 +67,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="CheckBox">
                         <Border x:Name="Track" Background="{DynamicResource TrackOffBrush}"
-                                CornerRadius="11" Padding="3">
+                                CornerRadius="{DynamicResource RadiusPill}" Padding="3">
                             <Ellipse x:Name="Knob" Width="16" Height="16"
                                      Fill="{DynamicResource ToggleKnobBrush}"
                                      HorizontalAlignment="Left" />
@@ -63,6 +79,9 @@
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentBrush}" />
                                 <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.4" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -84,7 +103,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                                CornerRadius="6" SnapsToDevicePixels="True">
+                                CornerRadius="{DynamicResource RadiusControl}" SnapsToDevicePixels="True">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                               Margin="{TemplateBinding Padding}" />
                         </Border>
@@ -104,6 +123,55 @@
             </Setter>
         </Style>
 
+        <!--  强调按钮  -->
+        <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource ModernButton}">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+
+        <!--  小标签按钮（常见播放器一键填入）  -->
+        <Style x:Key="ChipButton" TargetType="Button">
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Background" Value="{DynamicResource ControlBgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ChipBd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="{DynamicResource RadiusControl}" SnapsToDevicePixels="True"
+                                TextElement.Foreground="{TemplateBinding Foreground}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ChipBd" Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ChipBd" Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--  小标签按钮选中态（已在白名单里）  -->
+        <!--  用强调色描边+文字而不是填充背景：ChipButton 模板里的 hover/pressed 触发器
+              优先级高于 Style setter，填背景的话一悬停就掉色，看起来像没选中。  -->
+        <Style x:Key="ChipButtonOn" TargetType="Button" BasedOn="{StaticResource ChipButton}">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
         <!--  输入框  -->
         <Style x:Key="ModernText" TargetType="TextBox">
             <Setter Property="Height" Value="30" />
@@ -114,13 +182,14 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="CaretBrush" Value="{DynamicResource ForegroundBrush}" />
             <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6" SnapsToDevicePixels="True">
+                                CornerRadius="{DynamicResource RadiusControl}" SnapsToDevicePixels="True">
                             <ScrollViewer x:Name="PART_ContentHost" Margin="10,0"
                                           VerticalAlignment="Center" />
                         </Border>
@@ -141,7 +210,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="5"
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource RadiusControl}"
                                 Margin="4,1" Padding="{TemplateBinding Padding}">
                             <ContentPresenter VerticalAlignment="Center" />
                         </Border>
@@ -175,7 +244,7 @@
                                     <ControlTemplate TargetType="ToggleButton">
                                         <Border x:Name="Bd" Background="{DynamicResource ControlBgBrush}"
                                                 BorderBrush="{DynamicResource ControlBorderBrush}"
-                                                BorderThickness="1" CornerRadius="6" SnapsToDevicePixels="True">
+                                                BorderThickness="1" CornerRadius="{DynamicResource RadiusControl}" SnapsToDevicePixels="True">
                                             <Path x:Name="Arrow" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                   Margin="0,0,11,0" Data="M0,0 L3.5,3.5 L7,0"
                                                   Stroke="{DynamicResource SubTextBrush}" StrokeThickness="1.3" />
@@ -183,6 +252,9 @@
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
                                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -199,7 +271,7 @@
                                    PopupAnimation="Fade">
                                 <Border Background="{DynamicResource CardBackground}"
                                         BorderBrush="{DynamicResource ControlBorderBrush}"
-                                        BorderThickness="1" CornerRadius="7" Margin="0,4,0,0"
+                                        BorderThickness="1" CornerRadius="{DynamicResource RadiusControlOuter}" Margin="0,4,0,0"
                                         MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                                         MaxHeight="{TemplateBinding MaxDropDownHeight}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -213,6 +285,43 @@
             </Setter>
         </Style>
 
+        <!--  分段选择（浅色 / 深色）  -->
+        <Style x:Key="SegmentItem" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource RadiusControl}"
+                                Padding="15,5" Margin="2">
+                            <TextBlock x:Name="Txt" Text="{TemplateBinding Content}"
+                                       FontSize="12" HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource SubTextBrush}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Txt" Property="Foreground" Value="White" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SegmentHost" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource ControlBgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource RadiusControlOuter}" />
+            <Setter Property="Padding" Value="2" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+        </Style>
+
         <!--  侧边导航项  -->
         <Style x:Key="NavItem" TargetType="RadioButton">
             <Setter Property="Cursor" Value="Hand" />
@@ -220,7 +329,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="7"
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource RadiusControl}"
                                 Padding="11,9" SnapsToDevicePixels="True">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -261,22 +370,44 @@
         </Style>
 
         <Style x:Key="PageTitle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="19" />
+            <Setter Property="FontSize" Value="{DynamicResource FontSizeTitle}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Margin" Value="2,0,0,3" />
         </Style>
 
         <Style x:Key="PageDesc" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
             <Setter Property="Foreground" Value="{DynamicResource SubTextBrush}" />
             <Setter Property="Margin" Value="2,0,0,18" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <!--  状态条  -->
+        <Style x:Key="StatusCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource ControlBgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource RadiusShell}" />
+            <Setter Property="Padding" Value="16,13" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <!--  色调预览色块：做成任务栏条的横条比例，比正方形更接近实际观感  -->
+        <Style x:Key="ToneSwatch" TargetType="Border">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="CornerRadius" Value="{DynamicResource RadiusMicro}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Margin" Value="10,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
     </Window.Resources>
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="172" />
+            <ColumnDefinition Width="176" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
@@ -290,7 +421,7 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Orientation="Horizontal" Margin="18,20,16,22">
-                    <Border Width="24" Height="24" CornerRadius="7"
+                    <Border Width="24" Height="24" CornerRadius="{DynamicResource RadiusControlOuter}"
                             Background="{DynamicResource AccentBrush}">
                         <TextBlock Text="D" FontSize="14" FontWeight="Bold" Foreground="White"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -301,11 +432,11 @@
 
                 <StackPanel Grid.Row="1" Margin="9,0">
                     <RadioButton x:Name="NavGeneral" Style="{StaticResource NavItem}"
-                                 Content="通用设置" GroupName="Nav" IsChecked="True"
+                                 Content="通用" GroupName="Nav" IsChecked="True"
                                  Tag="M8,1 V3 M8,13 V15 M1,8 H3 M13,8 H15 M3.1,3.1 L4.5,4.5 M11.5,11.5 L12.9,12.9 M12.9,3.1 L11.5,4.5 M4.5,11.5 L3.1,12.9 M8,5.6 A2.4,2.4 0 1 0 8,10.4 A2.4,2.4 0 1 0 8,5.6 Z"
                                  Checked="OnNavClick" />
-                    <RadioButton x:Name="NavTaskbar" Style="{StaticResource NavItem}"
-                                 Content="任务栏美化" GroupName="Nav"
+                    <RadioButton x:Name="NavAppearance" Style="{StaticResource NavItem}"
+                                 Content="外观" GroupName="Nav"
                                  Tag="M1,2.5 H15 V13.5 H1 Z M1,7.2 H15 M13.2,8.6 H13.2 M10.6,8.6 H10.6"
                                  Checked="OnNavClick" />
                     <RadioButton x:Name="NavTheme" Style="{StaticResource NavItem}"
@@ -317,7 +448,7 @@
                                  Tag="M1.5,1.5 H6.5 V6.5 H1.5 Z M9.5,1.5 H14.5 V6.5 H9.5 Z M1.5,9.5 H6.5 V14.5 H1.5 Z M9.5,9.5 H14.5 V14.5 H9.5 Z"
                                  Checked="OnNavClick" />
                     <RadioButton x:Name="NavDiag" Style="{StaticResource NavItem}"
-                                 Content="诊断" GroupName="Nav"
+                                 Content="诊断与日志" GroupName="Nav"
                                  Tag="M8,1.6 A6.4,6.4 0 1 1 7.99,1.6 Z M8,11.6 V11.7 M8,8.4 V4.8"
                                  Checked="OnNavClick" />
                 </StackPanel>
@@ -338,62 +469,73 @@
             <!--  页 1：通用  -->
             <ScrollViewer x:Name="PageGeneral" Style="{StaticResource PageScroller}">
                 <StackPanel>
-                    <TextBlock Text="通用设置" Style="{StaticResource PageTitle}" />
-                    <TextBlock Text="启动方式、托盘与桌面图标的日常行为" Style="{StaticResource PageDesc}" />
+                    <TextBlock Text="通用" Style="{StaticResource PageTitle}" />
+                    <TextBlock Style="{StaticResource PageDesc}"
+                               Text="启动方式、托盘与桌面图标的日常行为。这些设置都不影响任务栏外观。" />
 
                     <TextBlock Text="启动" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,16">
-                                <CheckBox x:Name="ChkStartup" DockPanel.Dock="Right"
-                                          Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                            <DockPanel Margin="0,0,0,10">
+                                <CheckBox x:Name="ChkStartup" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
                                           Checked="OnStartupChanged" Unchecked="OnStartupChanged" />
-                                <StackPanel VerticalAlignment="Center">
+                                <StackPanel>
                                     <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="登录 Windows 后自动在后台运行 DeskBar" Style="{StaticResource RowDesc}" />
-                                </StackPanel>
-                            </DockPanel>
-                            <DockPanel>
-                                <CheckBox x:Name="ChkShowTray" DockPanel.Dock="Right"
-                                          Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
-                                          Checked="OnShowTrayChanged" Unchecked="OnShowTrayChanged" />
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="显示托盘图标" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="隐藏后仍可通过再次运行 DeskBar 呼出设置窗口" Style="{StaticResource RowDesc}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="登录 Windows 后自动在后台运行，不弹出任何窗口。" />
                                 </StackPanel>
                             </DockPanel>
                         </StackPanel>
                     </Border>
 
-                    <TextBlock Text="桌面" Style="{StaticResource GroupTitle}" />
+                    <TextBlock Text="托盘与桌面" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
-                        <DockPanel>
-                            <CheckBox x:Name="ChkDoubleClick" DockPanel.Dock="Right"
-                                      Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
-                                      Checked="OnDoubleClickChanged" Unchecked="OnDoubleClickChanged" />
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="双击桌面空白切换图标" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="双击桌面空白区域，一键显示或隐藏全部桌面图标" Style="{StaticResource RowDesc}" />
-                            </StackPanel>
-                        </DockPanel>
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,10">
+                                <CheckBox x:Name="ChkShowTray" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
+                                          Checked="OnShowTrayChanged" Unchecked="OnShowTrayChanged" />
+                                <StackPanel>
+                                    <TextBlock Text="显示托盘图标" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="关闭后进程仍在后台运行；再次启动 DeskBar 即可呼出本窗口。" />
+                                </StackPanel>
+                            </DockPanel>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,10" />
+
+                            <DockPanel>
+                                <CheckBox x:Name="ChkDoubleClick" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
+                                          Checked="OnDoubleClickChanged" Unchecked="OnDoubleClickChanged" />
+                                <StackPanel>
+                                    <TextBlock Text="双击桌面空白处切换图标" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="双击桌面空白区域显示或隐藏所有桌面图标。只响应空白处，不影响图标本身的双击。" />
+                                </StackPanel>
+                            </DockPanel>
+                        </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
 
-            <!--  页 2：任务栏美化  -->
-            <ScrollViewer x:Name="PageTaskbar" Style="{StaticResource PageScroller}" Visibility="Collapsed">
+            <!--  页 2：外观  -->
+            <ScrollViewer x:Name="PageAppearance" Style="{StaticResource PageScroller}">
                 <StackPanel>
-                    <TextBlock Text="任务栏美化" Style="{StaticResource PageTitle}" />
-                    <TextBlock Text="透明、亚克力与居中止岛外观" Style="{StaticResource PageDesc}" />
+                    <TextBlock Text="外观" Style="{StaticResource PageTitle}" />
+                    <TextBlock Style="{StaticResource PageDesc}"
+                               Text="任务栏与浮岛的材质。改变后立即生效，无需重启资源管理器。" />
 
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
-                            <CheckBox x:Name="ChkTranslucentTaskbar" DockPanel.Dock="Right"
-                                      Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                            <CheckBox x:Name="ChkTranslucentTaskbar" Style="{StaticResource ToggleSwitch}"
+                                      DockPanel.Dock="Right" VerticalAlignment="Center"
                                       Checked="OnTranslucentTaskbarChanged" Unchecked="OnTranslucentTaskbarChanged" />
-                            <StackPanel VerticalAlignment="Center">
+                            <StackPanel>
                                 <TextBlock Text="启用任务栏美化" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="关闭后立即还原为 Windows 原生任务栏外观" Style="{StaticResource RowDesc}" />
+                                <TextBlock Style="{StaticResource RowDesc}"
+                                           Text="关闭后立即还原为 Windows 原生任务栏外观，下方所有选项随之失效。" />
                             </StackPanel>
                         </DockPanel>
                     </Border>
@@ -401,180 +543,446 @@
                     <TextBlock Text="任务栏风格" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,16">
-                                <ComboBox x:Name="CmbTaskbarStyle" DockPanel.Dock="Right"
-                                          Style="{StaticResource ModernCombo}" Width="270"
-                                          VerticalAlignment="Center"
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="布局" Style="{StaticResource RowTitle}" />
+                                    <TextBlock x:Name="TxtStyleDesc" Style="{StaticResource RowDesc}"
+                                               Text="居中岛屿：把开始区与托盘区各挖成独立浮岛，中间透出壁纸。" />
+                                </StackPanel>
+                                <ComboBox x:Name="CmbTaskbarStyle" Grid.Column="1" Width="286"
+                                          Style="{StaticResource ModernCombo}"
+                                          VerticalAlignment="Center" Margin="16,0,0,0"
                                           SelectionChanged="OnTaskbarStyleChanged">
-                                    <ComboBoxItem Content="部分亚克力 · 居中岛屿 + 托盘岛屿" Tag="island_acrylic" />
-                                    <ComboBoxItem Content="全透明 · 整条透出壁纸" Tag="clear" />
-                                    <ComboBoxItem Content="全亚克力 · 整条毛玻璃" Tag="acrylic" />
+                                    <ComboBoxItem Content="居中岛屿 · 挖空开始区与托盘区" Tag="island_acrylic" IsSelected="True" />
+                                    <ComboBoxItem Content="整条磨砂 · 全宽毛玻璃" Tag="acrylic" />
+                                    <ComboBoxItem Content="整条全透明 · 完全透出壁纸" Tag="clear" />
                                 </ComboBox>
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="外观样式" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="岛屿模式只保留图标区域的玻璃质感" Style="{StaticResource RowDesc}" />
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,12" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="材质色调" Style="{StaticResource RowTitle}" />
+                                    <TextBlock x:Name="TxtToneDesc" Style="{StaticResource RowDesc}"
+                                               Text="决定磨砂层的颜色与不透明度。原味自然几乎不着色，直接透出壁纸。" />
+                                    <TextBlock x:Name="TxtToneLocked" Style="{StaticResource WarnHint}"
+                                               Text="自动主题已接管色调，请到「自动主题」页分别为白天与夜晚指定材质。"
+                                               Visibility="Collapsed" />
                                 </StackPanel>
-                            </DockPanel>
-                            <DockPanel>
-                                <ComboBox x:Name="CmbAcrylicTone" DockPanel.Dock="Right"
-                                          Style="{StaticResource ModernCombo}" Width="270"
-                                          VerticalAlignment="Center"
+                                <ComboBox x:Name="CmbAcrylicTone" Grid.Column="1" Width="228"
+                                          Style="{StaticResource ModernCombo}"
+                                          VerticalAlignment="Center" Margin="16,0,0,0"
                                           SelectionChanged="OnAcrylicToneChanged">
-                                    <ComboBoxItem Content="原味自然亚克力（图中同款）" Tag="natural" />
-                                    <ComboBoxItem Content="浅色白玉磨砂（清爽透亮）" Tag="light" />
-                                    <ComboBoxItem Content="深色黑曜石（暗色沉稳）" Tag="dark" />
-                                    <ComboBoxItem Content="随系统自动（昼浅夜深）" Tag="auto" />
+                                    <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" IsSelected="True" />
+                                    <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
+                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（14% 覆盖）" Tag="sheertights" />
+                                    <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="亚克力色调" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="决定毛玻璃的底色倾向与透明度" Style="{StaticResource RowDesc}" />
+                                <Border x:Name="ToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
+                                        Background="Transparent" />
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,12" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="磨砂强度" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="模糊半径。过大可能拖慢低端 GPU 的桌面合成。" />
+                                    <TextBlock x:Name="TxtBlurUnsupported" Style="{StaticResource WarnHint}"
+                                               Text="当前系统的任务栏模糊接口不可用，已回退为固定亚克力，此项暂不生效。"
+                                               Visibility="Collapsed" />
                                 </StackPanel>
-                            </DockPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                            VerticalAlignment="Center" Margin="16,0,0,0">
+                                    <Slider x:Name="SldBlurAmount" Width="180" Minimum="0" Maximum="100"
+                                            TickFrequency="1" IsSnapToTickEnabled="True"
+                                            VerticalAlignment="Center"
+                                            ValueChanged="OnBlurAmountChanged" />
+                                    <TextBlock x:Name="TxtBlurValue" Text="18" Width="34"
+                                               FontSize="12" TextAlignment="Right"
+                                               VerticalAlignment="Center"
+                                               Foreground="{DynamicResource SubTextBrush}" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="BdRuntimeHint" Style="{StaticResource Card}" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="TxtRuntimeTitle" Style="{StaticResource RowTitle}"
+                                       Text="运行状态" />
+                            <TextBlock x:Name="TxtRuntimeHint" Style="{StaticResource Hint}" Text="" />
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
 
-            <!--  页 3：自动主题  -->
-            <ScrollViewer x:Name="PageTheme" Style="{StaticResource PageScroller}" Visibility="Collapsed">
+            <!--  页 3：自动主题（核心重做）  -->
+            <ScrollViewer x:Name="PageTheme" Style="{StaticResource PageScroller}">
                 <StackPanel>
                     <TextBlock Text="自动主题" Style="{StaticResource PageTitle}" />
-                    <TextBlock Text="按时间自动切换 Windows 深浅色模式" Style="{StaticResource PageDesc}" />
+                    <TextBlock Style="{StaticResource PageDesc}"
+                               Text="分白天与夜晚两个时段。每个时段各自决定界面用浅色还是深色、任务栏用什么材质，到点自动切换。" />
+
+                    <!--  实时状态条  -->
+                    <Border Style="{StaticResource StatusCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Border x:Name="BdCurrentPhase" CornerRadius="{DynamicResource RadiusMicro}" Padding="8,3"
+                                            Background="{DynamicResource AccentBrush}"
+                                            VerticalAlignment="Center">
+                                        <TextBlock x:Name="TxtCurrentPhase" Text="白天"
+                                                   FontSize="12" Foreground="White" />
+                                    </Border>
+                                    <TextBlock x:Name="TxtCurrentPlan" Margin="10,0,0,0"
+                                               FontSize="14" FontWeight="SemiBold"
+                                               VerticalAlignment="Center"
+                                               Text="浅色 · 柔雾" />
+                                </StackPanel>
+                                <TextBlock x:Name="TxtNextSwitch" Style="{StaticResource Hint}" Text="" />
+                                <TextBlock x:Name="TxtSystemTheme" Style="{StaticResource Hint}" Text="" />
+                            </StackPanel>
+                            <Button x:Name="BtnApplyNow" Grid.Column="1"
+                                    Style="{StaticResource ModernButton}"
+                                    Content="立即应用当前时段" MinWidth="130"
+                                    VerticalAlignment="Center"
+                                    Click="OnApplyCurrentPlanNow" />
+                        </Grid>
+                    </Border>
 
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
-                            <CheckBox x:Name="ChkAutoTimeTheme" DockPanel.Dock="Right"
-                                      Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                            <CheckBox x:Name="ChkAutoTimeTheme" Style="{StaticResource ToggleSwitch}"
+                                      DockPanel.Dock="Right" VerticalAlignment="Center"
                                       Checked="OnAutoTimeThemeChanged" Unchecked="OnAutoTimeThemeChanged" />
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="启用定时自动切换" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="到达设定时刻自动切换系统与应用的深浅配色" Style="{StaticResource RowDesc}" />
+                            <StackPanel>
+                                <TextBlock Text="启用按时段自动切换" Style="{StaticResource RowTitle}" />
+                                <TextBlock Style="{StaticResource RowDesc}"
+                                           Text="关闭后不再按时间切换，白天下方两套方案仅作保存，不会自动生效。" />
                             </StackPanel>
                         </DockPanel>
                     </Border>
 
-                    <TextBlock Text="切换时刻" Style="{StaticResource GroupTitle}" />
+                    <TextBlock Text="时段划分" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,14">
-                                <TextBox x:Name="TxtLightTime" DockPanel.Dock="Right" Width="90"
-                                         Style="{StaticResource ModernText}" TextAlignment="Center"
-                                         Text="07:00" TextChanged="OnTimeConfigChanged" />
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="浅色模式开始" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="24 小时制，格式 HH:mm" Style="{StaticResource RowDesc}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Margin="0,0,22,0">
+                                    <TextBlock Text="白天开始" Style="{StaticResource RowTitle}" Margin="0,0,0,6" />
+                                    <TextBox x:Name="TxtLightTime" Width="96" TextAlignment="Center"
+                                             Style="{StaticResource ModernText}"
+                                             GotFocus="OnTimeBoxFocus" LostFocus="OnTimeBoxLostFocus"
+                                             KeyDown="OnTimeBoxKeyDown" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,22,0">
+                                    <TextBlock Text="夜晚开始" Style="{StaticResource RowTitle}" Margin="0,0,0,6" />
+                                    <TextBox x:Name="TxtDarkTime" Width="96" TextAlignment="Center"
+                                             Style="{StaticResource ModernText}"
+                                             GotFocus="OnTimeBoxFocus" LostFocus="OnTimeBoxLostFocus"
+                                             KeyDown="OnTimeBoxKeyDown" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" VerticalAlignment="Bottom" Margin="0,0,0,6">
+                                    <TextBlock x:Name="TxtSpanSummary" Style="{StaticResource Hint}"
+                                               Text="" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock x:Name="TxtTimeError" Style="{StaticResource BadHint}"
+                                       Text="" Visibility="Collapsed" />
+                            <TextBlock Style="{StaticResource Hint}"
+                                       Text="24 小时制 HH:mm。夜晚开始早于白天开始表示跨夜，例如 19:00 → 07:00。" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="白天方案" Style="{StaticResource GroupTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="界面配色" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="本软件自身窗口，以及（可选）Windows 全局深浅色。" />
+                                </StackPanel>
+                                <Border Grid.Column="1" Style="{StaticResource SegmentHost}"
+                                        VerticalAlignment="Top">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="RdoDayLight" Style="{StaticResource SegmentItem}"
+                                                     Content="浅色" GroupName="DayShade"
+                                                     IsChecked="True" Checked="OnDayShadeChanged" />
+                                        <RadioButton x:Name="RdoDayDark" Style="{StaticResource SegmentItem}"
+                                                     Content="深色" GroupName="DayShade"
+                                                     Checked="OnDayShadeChanged" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,12" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="任务栏材质" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="白天时段任务栏与浮岛使用的色调。" />
+                                </StackPanel>
+                                <ComboBox x:Name="CmbDayTone" Grid.Column="1" Width="228"
+                                          Style="{StaticResource ModernCombo}"
+                                          VerticalAlignment="Center" Margin="16,0,0,0"
+                                          SelectionChanged="OnDayToneChanged">
+                                    <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
+                                    <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" IsSelected="True" />
+                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（14% 覆盖）" Tag="sheertights" />
+                                    <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
+                                </ComboBox>
+                                <Border x:Name="DayToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
+                                        Background="Transparent" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="夜晚方案" Style="{StaticResource GroupTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="界面配色" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="可与白天相同，也可以昼夜颠倒。" />
+                                </StackPanel>
+                                <Border Grid.Column="1" Style="{StaticResource SegmentHost}"
+                                        VerticalAlignment="Top">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="RdoNightLight" Style="{StaticResource SegmentItem}"
+                                                     Content="浅色" GroupName="NightShade"
+                                                     Checked="OnNightShadeChanged" />
+                                        <RadioButton x:Name="RdoNightDark" Style="{StaticResource SegmentItem}"
+                                                     Content="深色" GroupName="NightShade"
+                                                     IsChecked="True" Checked="OnNightShadeChanged" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,12" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="任务栏材质" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="夜晚时段任务栏与浮岛使用的色调。" />
+                                </StackPanel>
+                                <ComboBox x:Name="CmbNightTone" Grid.Column="1" Width="228"
+                                          Style="{StaticResource ModernCombo}"
+                                          VerticalAlignment="Center" Margin="16,0,0,0"
+                                          SelectionChanged="OnNightToneChanged">
+                                    <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
+                                    <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
+                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（14% 覆盖）" Tag="sheertights" IsSelected="True" />
+                                    <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
+                                </ComboBox>
+                                <Border x:Name="NightToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
+                                        Background="Transparent" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="系统联动" Style="{StaticResource GroupTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel>
+                                <CheckBox x:Name="ChkApplySystemTheme" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
+                                          Checked="OnApplySystemThemeChanged" Unchecked="OnApplySystemThemeChanged" />
+                                <StackPanel>
+                                    <TextBlock Text="同时切换 Windows 全局深浅色" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="到点时一并修改系统设置里的「应用模式」与「Windows 模式」，资源管理器、开始菜单等会跟着变。" />
                                 </StackPanel>
                             </DockPanel>
-                            <DockPanel Margin="0,0,0,14">
-                                <TextBox x:Name="TxtDarkTime" DockPanel.Dock="Right" Width="90"
-                                         Style="{StaticResource ModernText}" TextAlignment="Center"
-                                         Text="19:00" TextChanged="OnTimeConfigChanged" />
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="深色模式开始" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="24 小时制，格式 HH:mm" Style="{StaticResource RowDesc}" />
-                                </StackPanel>
-                            </DockPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                <Button Content="立即切换为浅色" Style="{StaticResource ModernButton}"
-                                        Click="OnManualSwitchLight" />
-                                <Button Content="立即切换为深色" Style="{StaticResource ModernButton}"
-                                        Margin="14,0,0,0" Click="OnManualSwitchDark" />
-                            </StackPanel>
-                            <TextBlock x:Name="TxtThemeStatus" Style="{StaticResource RowDesc}"
-                                       Margin="0,12,0,0" Text="当前系统：正在读取..." />
+                            <TextBlock Style="{StaticResource WarnHint}"
+                                       Text="注意：开启后 DeskBar 会写入系统注册表并广播刷新消息，效果等同于手动在「设置 → 个性化 → 颜色」里切换。若不想影响系统外观，请关闭此项，仅让 DeskBar 自身跟随。" />
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
 
             <!--  页 4：小部件  -->
-            <ScrollViewer x:Name="PageWidgets" Style="{StaticResource PageScroller}" Visibility="Collapsed">
+            <ScrollViewer x:Name="PageWidgets" Style="{StaticResource PageScroller}">
                 <StackPanel>
                     <TextBlock Text="小部件" Style="{StaticResource PageTitle}" />
-                    <TextBlock Text="渲染在任务栏上的音乐胶囊与硬件监控浮岛" Style="{StaticResource PageDesc}" />
+                    <TextBlock Style="{StaticResource PageDesc}"
+                               Text="渲染在任务栏上的音乐胶囊与硬件监控浮岛。均不注入任何进程，只读取系统公开接口。" />
 
                     <TextBlock Text="任务栏音乐" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,16">
-                                <CheckBox x:Name="ChkMusicCapsule" DockPanel.Dock="Right"
-                                          Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                            <DockPanel Margin="0,0,0,10">
+                                <CheckBox x:Name="ChkMusicCapsule" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
                                           Checked="OnMusicCapsuleChanged" Unchecked="OnMusicCapsuleChanged" />
-                                <StackPanel VerticalAlignment="Center">
+                                <StackPanel>
                                     <TextBlock Text="启用任务栏音乐胶囊" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="在托盘左侧显示封面、曲名与播放控制" Style="{StaticResource RowDesc}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="在任务栏显示当前播放的歌曲、歌词与播放控制。通过系统媒体会话读取，无需逐个适配播放器。" />
                                 </StackPanel>
                             </DockPanel>
-                            <DockPanel Margin="0,0,0,16">
-                                <CheckBox x:Name="ChkMusicAutoHide" DockPanel.Dock="Right"
-                                          Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,10" />
+
+                            <DockPanel Margin="0,0,0,10">
+                                <CheckBox x:Name="ChkMusicAutoHide" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
                                           Checked="OnMusicAutoHideChanged" Unchecked="OnMusicAutoHideChanged" />
-                                <StackPanel VerticalAlignment="Center">
+                                <StackPanel>
                                     <TextBlock Text="无播放时自动隐藏" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="保持任务栏紧凑，不留空白占位" Style="{StaticResource RowDesc}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="没有活跃的媒体会话时收起胶囊，留出任务栏空间。" />
                                 </StackPanel>
                             </DockPanel>
-                            <DockPanel Margin="0,0,0,16">
-                                <CheckBox x:Name="ChkMusicControls" DockPanel.Dock="Right"
-                                          Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,10" />
+
+                            <DockPanel Margin="0,0,0,10">
+                                <CheckBox x:Name="ChkMusicControls" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
                                           Checked="OnMusicControlsChanged" Unchecked="OnMusicControlsChanged" />
-                                <StackPanel VerticalAlignment="Center">
+                                <StackPanel>
                                     <TextBlock Text="显示播放控制按钮" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="上一曲 / 播放暂停 / 下一曲" Style="{StaticResource RowDesc}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="在胶囊内显示上一首、播放/暂停、下一首。" />
                                 </StackPanel>
                             </DockPanel>
-                            <DockPanel>
-                                <TextBox x:Name="TxtMusicWhitelist" DockPanel.Dock="Right" Width="270"
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,10" />
+
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="胶囊宽度" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="歌词超出宽度时自动横向滚动。" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                            VerticalAlignment="Center" Margin="16,0,0,0">
+                                    <Slider x:Name="SldMusicWidth" Width="150" Minimum="200" Maximum="520"
+                                            TickFrequency="10" IsSnapToTickEnabled="True"
+                                            VerticalAlignment="Center"
+                                            ValueChanged="OnMusicWidthChanged" />
+                                    <TextBlock x:Name="TxtMusicWidthValue" Text="250 px" Width="48"
+                                               FontSize="12" TextAlignment="Right"
+                                               VerticalAlignment="Center"
+                                               Foreground="{DynamicResource SubTextBrush}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,10" />
+
+                            <StackPanel>
+                                <TextBlock Text="播放器白名单" Style="{StaticResource RowTitle}" />
+                                <TextBlock Style="{StaticResource RowDesc}"
+                                           Text="只接管这里列出的播放器，防止浏览器的视频、游戏语音等抢占胶囊。留空表示接受所有播放器。中文名和进程名都认，例如 QQ音乐、cloudmusic、Spotify；多个用逗号分隔。" />
+                                <TextBox x:Name="TxtMusicWhitelist" Margin="0,9,0,0"
                                          Style="{StaticResource ModernText}"
-                                         ToolTip="留空 = 接受所有播放器；多个用逗号分隔"
+                                         ToolTip="可以填中文名（QQ音乐）或进程名（QQMusic.exe），逗号、顿号、空格都能分隔"
                                          TextChanged="OnMusicWhitelistChanged" />
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="播放器白名单" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="留空接受全部；可填 QQMusic / cloudmusic / Spotify 等" Style="{StaticResource RowDesc}" />
-                                </StackPanel>
-                            </DockPanel>
+                                <TextBlock Text="常见播放器（点一下加入，再点一下移除）" Style="{StaticResource Hint}" />
+                                <WrapPanel x:Name="PnlWhitelistPresets" Margin="0,5,0,0" />
+                                <TextBlock x:Name="TxtWhitelistStatus" Style="{StaticResource Hint}" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 
                     <TextBlock Text="任务栏系统监控" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
-                            <CheckBox x:Name="ChkSystemMonitor" DockPanel.Dock="Right"
-                                      Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                            <CheckBox x:Name="ChkSystemMonitor" Style="{StaticResource ToggleSwitch}"
+                                      DockPanel.Dock="Right" VerticalAlignment="Center"
                                       Checked="OnSystemMonitorChanged" Unchecked="OnSystemMonitorChanged" />
-                            <StackPanel VerticalAlignment="Center">
+                            <StackPanel>
                                 <TextBlock Text="启用硬件监控浮岛" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="任务栏左侧显示 CPU / 内存 / 网络 / GPU，每秒刷新，不注入任何进程"
-                                           Style="{StaticResource RowDesc}" />
+                                <TextBlock Style="{StaticResource RowDesc}"
+                                           Text="在任务栏左侧显示 CPU / 内存 / 网络 / GPU，每秒刷新。点击可展开详情。" />
                             </StackPanel>
                         </DockPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
 
-            <!--  页 5：诊断  -->
-            <ScrollViewer x:Name="PageDiag" Style="{StaticResource PageScroller}" Visibility="Collapsed">
+            <!--  页 5：诊断与日志  -->
+            <ScrollViewer x:Name="PageDiag" Style="{StaticResource PageScroller}">
                 <StackPanel>
-                    <TextBlock Text="诊断" Style="{StaticResource PageTitle}" />
-                    <TextBlock Text="运行日志与系统层级探测，供排查问题时使用" Style="{StaticResource PageDesc}" />
+                    <TextBlock Text="诊断与日志" Style="{StaticResource PageTitle}" />
+                    <TextBlock Style="{StaticResource PageDesc}"
+                               Text="排查异常时才需要用到。日常使用建议保持默认，避免额外写盘。" />
 
                     <TextBlock Text="运行日志" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,16">
-                                <CheckBox x:Name="ChkDebugLog" DockPanel.Dock="Right"
-                                          Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                            <DockPanel Margin="0,0,0,12">
+                                <CheckBox x:Name="ChkDebugLog" Style="{StaticResource ToggleSwitch}"
+                                          DockPanel.Dock="Right" VerticalAlignment="Center"
                                           Checked="OnDebugLogChanged" Unchecked="OnDebugLogChanged" />
-                                <StackPanel VerticalAlignment="Center">
+                                <StackPanel>
                                     <TextBlock Text="记录运行调试日志" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="默认关闭以免写盘；仅在排查问题时开启" Style="{StaticResource RowDesc}" />
+                                    <TextBlock Style="{StaticResource RowDesc}"
+                                               Text="默认关闭以免频繁写盘；错误日志不受此开关影响，始终会记录。" />
                                 </StackPanel>
                             </DockPanel>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,12" />
+
                             <StackPanel Orientation="Horizontal">
-                                <Button Content="打开日志目录" Style="{StaticResource ModernButton}"
-                                        Click="OnOpenLogDir" />
-                                <Button Content="清空日志" Style="{StaticResource ModernButton}"
-                                        Margin="8,0,0,0" Click="OnClearLogs" />
+                                <Button Style="{StaticResource ModernButton}" Content="打开日志目录"
+                                        MinWidth="112" Click="OnOpenLogDir" />
+                                <Button Style="{StaticResource ModernButton}" Content="清空日志"
+                                        MinWidth="96" Margin="8,0,0,0" Click="OnClearLogs" />
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -582,30 +990,42 @@
                     <TextBlock Text="系统探测" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
-                                <Button x:Name="BtnToggleIcons" Content="立即切换桌面图标"
-                                        Style="{StaticResource ModernButton}" Click="OnToggleIconsNow" />
-                                <Button x:Name="BtnProbe" Content="探测系统层级"
-                                        Style="{StaticResource ModernButton}" Margin="8,0,0,0"
-                                        Click="OnProbeWindows" />
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <Button Style="{StaticResource ModernButton}" Content="切换桌面图标"
+                                        MinWidth="120" Click="OnToggleIconsNow" />
+                                <Button Style="{StaticResource ModernButton}" Content="探测系统层级"
+                                        MinWidth="120" Margin="8,0,0,0" Click="OnProbeWindows" />
                             </StackPanel>
-                            <TextBlock x:Name="TxtProbe" FontFamily="Consolas" FontSize="11"
-                                       Foreground="{DynamicResource SubTextBrush}"
-                                       TextWrapping="Wrap" />
+                            <Border Background="{DynamicResource ControlBgBrush}"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    BorderThickness="1" CornerRadius="{DynamicResource RadiusControl}" Padding="10,8">
+                                <ScrollViewer MaxHeight="160" VerticalScrollBarVisibility="Auto">
+                                    <TextBlock x:Name="TxtProbe" Text="尚未探测。"
+                                               FontFamily="Consolas" FontSize="11"
+                                               TextWrapping="Wrap" />
+                                </ScrollViewer>
+                            </Border>
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
 
             <!--  底部操作栏  -->
-            <Border Grid.Row="1" BorderBrush="{DynamicResource ControlBorderBrush}"
-                    BorderThickness="0,1,0,0" Padding="22,12">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="隐藏到托盘" Style="{StaticResource ModernButton}"
-                            Margin="0,0,10,0" Click="OnHideToTray" />
-                    <Button Content="关闭" Style="{StaticResource ModernButton}"
-                            Width="80" Click="OnClose" />
-                </StackPanel>
+            <Border Grid.Row="1" BorderThickness="0,1,0,0"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    Padding="22,12">
+                <Grid>
+                    <TextBlock x:Name="TxtFooterHint" VerticalAlignment="Center"
+                               FontSize="11" TextWrapping="NoWrap"
+                               Foreground="{DynamicResource SubTextBrush}"
+                               Text="所有设置即时生效并自动保存。" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource ModernButton}" Content="隐藏到托盘"
+                                MinWidth="96" Click="OnHideToTray" />
+                        <Button Style="{StaticResource ModernButton}" Content="关闭"
+                                MinWidth="80" Margin="8,0,0,0" Click="OnClose" />
+                    </StackPanel>
+                </Grid>
             </Border>
         </Grid>
     </Grid>

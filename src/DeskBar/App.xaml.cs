@@ -31,22 +31,37 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        _singleInstance = new Mutex(true, @"Local\DeskBar_SingleInstance", out var isNew);
-        if (!isNew)
+        // 单实例互斥体：提权实例创建的 Local\ 互斥体不允许普通权限进程打开，
+        // 必须容错 —— 否则「计划任务提权启动 + 用户手动双击」会直接崩溃退出。
+        try
         {
-            // 唤醒已有实例的设置窗口（对应用户需求：隐藏托盘图标后再次点击启动图标可唤出窗口）
-            try
+            _singleInstance = new Mutex(true, @"Local\DeskBar_SingleInstance", out var isNew);
+            if (!isNew)
             {
-                using var ev = EventWaitHandle.OpenExisting(@"Local\DeskBar_WakeEvent");
-                ev.Set();
+                // 唤醒已有实例的设置窗口（对应用户需求：隐藏托盘图标后再次点击启动图标可唤出窗口）
+                try
+                {
+                    using var ev = EventWaitHandle.OpenExisting(@"Local\DeskBar_WakeEvent");
+                    ev.Set();
+                }
+                catch { }
+                // 副实例立即退出，绝不执行 OnExit 中的清理逻辑（否则会破坏主实例的任务栏与托盘状态）
+                Environment.Exit(0);
+                return;
             }
-            catch { }
-            // 副实例立即退出，绝不执行 OnExit 中的清理逻辑（否则会破坏主实例的任务栏与托盘状态）
+            _ownsMutex = true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // 互斥体已被「管理员权限实例」持有 —— 本次普通权限启动直接让位，而不是抛异常崩溃
             Environment.Exit(0);
             return;
         }
-
-        _ownsMutex = true;
+        catch (Exception)
+        {
+            // 互斥体机制异常时不应阻断启动
+            _ownsMutex = true;
+        }
         base.OnStartup(e);
 
         // 创建全局唤醒事件监听线程
@@ -88,33 +103,58 @@ public partial class App : System.Windows.Application
         Settings = _settings;
         Services.Log.IsDebugEnabled = _settings.EnableDebugLog;
         Services.Log.Info($"DeskBar starting, OS build={Environment.OSVersion.Version.Build}");
+        try
+        {
+            var wid = System.Security.Principal.WindowsIdentity.GetCurrent();
+            Services.Log.Info($"Startup diag: is64={Environment.Is64BitProcess} user={Environment.UserName} domain={Environment.UserDomainName} identity={wid.Name} elevated={Services.NativeTaskbarAppearanceService.IsElevated}");
+        }
+        catch (Exception ex) { Services.Log.Warn($"Startup diag failed: {ex.Message}"); }
+
         _theme = new ThemeService();
         Theme = _theme;
 
-        // 仅读取配置，暂不立即触发切换检查
+        // ThemeService 的每个属性 setter 都会在 _autoTimeEnabled 为真时立刻 CheckTimeAndApply()。
+        // 而字段默认 _autoTimeEnabled=true、_applySystemTheme=true，若直接顺序赋值，
+        // 第一个 LightStart 就会用「半初始化配置」（默认 07:00/19:00 + 默认 softmist + 改系统主题=true）
+        // 抢先写一次系统注册表并广播。所以初始化期间必须先关掉，全部就位后再启用。
+        _theme.AutoTimeEnabled = false;
+
         if (TimeSpan.TryParse(_settings.LightStartTime, out var lt)) _theme.LightStart = lt;
         if (TimeSpan.TryParse(_settings.DarkStartTime, out var dt)) _theme.DarkStart = dt;
+        _theme.DayPlan = new ThemePlan { IsLight = _settings.DayThemeLight, Tone = _settings.DayAcrylicTone };
+        _theme.NightPlan = new ThemePlan { IsLight = _settings.NightThemeLight, Tone = _settings.NightAcrylicTone };
+        _theme.ApplySystemTheme = _settings.AutoTimeApplySystemTheme;
+
+        // 配置全部就位后才启用：此后只会用完整配置做一次判断
         _theme.AutoTimeEnabled = _settings.AutoTimeTheme;
 
         // 启动定时器：延迟 6 秒后再做第一次时间段校验，确保不占用开机黄金启动期
         _theme.StartScheduleTimer(6000);
 
-        var light = _theme.GetSystemUsesLightTheme();
+        var light = _settings.AutoTimeTheme ? _theme.PlanAt(DateTime.Now).IsLight : _theme.GetSystemUsesLightTheme();
         ApplyAppTheme(light);
         _theme.ThemeChanged += l => Dispatcher.Invoke(() =>
         {
             ApplyAppTheme(l);
-            if (_settings.TranslucentTaskbar)
-            {
-                TaskbarService.ApplyStyle(_settings.TaskbarStyle, _settings.AcrylicTone);
-            }
+            ApplyToneForCurrentPlan(force: true);
+        });
+        // 时段方案生效：一次性把「深浅色 + 任务栏色调」都换成该时段的配置
+        _theme.PlanApplied += plan => Dispatcher.Invoke(() =>
+        {
+            ApplyAppTheme(plan.IsLight);
+            ApplyToneNow(plan.Tone);
         });
         _theme.StartWatching();
 
-        Services.Log.Info($"Startup check TranslucentTaskbar={_settings.TranslucentTaskbar}, style={_settings.TaskbarStyle}, tone={_settings.AcrylicTone}");
+        // 关键：AutoTimeEnabled 的 setter 在订阅 PlanApplied 之前就写了 _appliedPlan，
+        // 之后 CheckTimeAndApply 会因「方案未变化」而短路，PlanApplied 再也不会触发。
+        // 这里显式补一次，让 RuntimeTone 在启动时就等于当前时段的色调。
+        ApplyToneForCurrentPlan(force: true);
+
+        Services.Log.Info($"Startup check TranslucentTaskbar={_settings.TranslucentTaskbar}, style={_settings.TaskbarStyle}, tone={EffectiveTone}");
         if (_settings.TranslucentTaskbar)
         {
-            TaskbarService.ApplyStyle(_settings.TaskbarStyle, _settings.AcrylicTone);
+            try { TaskbarService.ApplyStyle(_settings.TaskbarStyle, EffectiveTone); } catch (Exception ex) { Services.Log.Error($"Startup ApplyStyle failed: {ex.Message}"); }
         }
 
         _doubleClick = new DoubleClickToggle(Icons) { Enabled = _settings.DoubleClickToggle };
@@ -134,7 +174,7 @@ public partial class App : System.Windows.Application
         CreateWidgetWindows();
         StartOwnerGuard();
 
-        // 同步并确保极速自启优化配置生效（消除 Windows 启动等待、补齐启动快捷方式）
+        // 同步开机自启配置：单通道 HKCU Run。
         if (_settings.RunAtStartup)
         {
             StartupService.SetEnabled(true);
@@ -211,12 +251,92 @@ public partial class App : System.Windows.Application
 
         Services.Log.Info($"app theme applied, light={light}");
 
+        // 菜单跟的是 tone（柔雾/黑丝）而不是应用的浅色/深色开关，两者可以不同步。
+        ApplyMenuTheme(Settings?.EffectiveTone);
+
         // 已打开的设置窗口要立刻跟上（尤其是标题栏颜色）
         try { (Current as App)?._settingsWindow?.RefreshThemeVisuals(); } catch { }
     }
 
+    /// <summary>
+    /// 按当前色调整体下发右键菜单的画刷。菜单模板在 Themes/MenuStyles.xaml，
+    /// 那里所有键都用 DynamicResource 引用，所以这里只换画刷就能整套换肤。
+    /// 托盘菜单与音乐胶囊菜单共用这一套，两处外观因此始终一致。
+    /// </summary>
+    internal static void ApplyMenuTheme(string? tone)
+    {
+        try
+        {
+            var res = Current.Resources;
+            res["DeskBarMenuSurfaceBrush"] = TonePalette.MenuSurfaceBrush(tone);
+            res["DeskBarMenuBorderBrush"] = TonePalette.MenuBorderBrush(tone);
+            res["DeskBarMenuTextBrush"] = TonePalette.MenuTextBrush(tone);
+            res["DeskBarMenuTextMutedBrush"] = TonePalette.MenuTextMutedBrush(tone);
+            res["DeskBarMenuCheckBrush"] = TonePalette.MenuCheckBrush(tone);
+            res["DeskBarMenuItemHoverBrush"] = TonePalette.MenuItemHoverBrush(tone);
+            res["DeskBarMenuItemPressedBrush"] = TonePalette.MenuItemPressedBrush(tone);
+            res["DeskBarMenuSeparatorBrush"] = TonePalette.MenuSeparatorBrush(tone);
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Error($"ApplyMenuTheme failed: {ex.Message}");
+        }
+    }
+
     internal DoubleClickToggle? DoubleClick => _doubleClick;
     internal TrayIconHost? Tray => _tray;
+
+    /// <summary>当前实际应使用的色调：自动主题接管时为时段色调，否则为用户手选值。</summary>
+    internal string EffectiveTone => _settings.EffectiveTone;
+
+    /// <summary>把某个色调立刻应用到任务栏与所有浮岛。</summary>
+    internal void ApplyToneNow(string tone)
+    {
+        _settings.RuntimeTone = tone;
+        ApplyMenuTheme(tone);
+        if (!_settings.TranslucentTaskbar) return;
+        try { TaskbarService.ApplyStyle(_settings.TaskbarStyle, tone); }
+        catch (Exception ex) { Services.Log.Error($"ApplyToneNow ApplyStyle failed: {ex.Message}"); }
+        RefreshWidgetBackgrounds();
+    }
+
+    /// <summary>
+    /// 自动主题开着时，让色调跟随当前时段；关着时清掉运行时覆盖，交还给用户手选值。
+    /// </summary>
+    internal void ApplyToneForCurrentPlan(bool force = false)
+    {
+        try
+        {
+            if (_settings.AutoTimeTheme && _theme is not null)
+            {
+                var tone = _theme.PlanAt(DateTime.Now).Tone;
+                if (!force && string.Equals(_settings.RuntimeTone, tone, StringComparison.OrdinalIgnoreCase)) return;
+                ApplyToneNow(tone);
+            }
+            else if (_settings.RuntimeTone is not null)
+            {
+                _settings.RuntimeTone = null;
+                ApplyMenuTheme(_settings.EffectiveTone);
+                if (_settings.TranslucentTaskbar)
+                {
+                    try { TaskbarService.ApplyStyle(_settings.TaskbarStyle, _settings.EffectiveTone); }
+                    catch (Exception ex) { Services.Log.Error($"ApplyToneForCurrentPlan restore failed: {ex.Message}"); }
+                    RefreshWidgetBackgrounds();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Error($"ApplyToneForCurrentPlan failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 当前系统里所有像内容的来源（不套白名单），供设置页反过来提示
+    /// 「你填的白名单把谁挡在外面了」。胶囊未启用时返回空。
+    /// </summary>
+    internal IReadOnlyList<string> GetRawMediaSources()
+        => _media?.GetRawSources() ?? Array.Empty<string>();
 
     /// <summary>按当前设置启停音乐胶囊会话监听（关闭时彻底释放 GSMTC 句柄）。</summary>
     private void SyncMusicCapsule()
@@ -257,6 +377,9 @@ public partial class App : System.Windows.Application
     /// <summary>任务栏风格 / 亚克力色调改变后，让两个外挂浮岛的背景与任务栏保持一致。</summary>
     internal void RefreshWidgetBackgrounds()
     {
+        // 右键菜单不是浮岛窗口，靠资源字典换肤，这里顺手一起刷新，
+        // 才能保证「改色调 → 下次右键就是新配色」而不用重启。
+        ApplyMenuTheme(Settings?.EffectiveTone);
         try { _monitorWindow?.RefreshBackground(); }
         catch (Exception ex) { Services.Log.Debug($"monitor refresh background failed: {ex.Message}"); }
         try { _capsule?.RefreshBackground(); }
@@ -298,17 +421,37 @@ public partial class App : System.Windows.Application
         _settings.Save();
         if (_doubleClick is not null) _doubleClick.Enabled = _settings.DoubleClickToggle;
         _tray?.SetVisible(_settings.ShowTrayIcon);
-        StartupService.SetEnabled(_settings.RunAtStartup);
+        // 同步开机自启配置：单通道 HKCU Run。
+        if (_settings.RunAtStartup)
+        {
+            StartupService.SetEnabled(true);
+        }
+        else if (StartupService.IsEnabled())
+        {
+            StartupService.SetEnabled(false);
+        }
 
         if (_theme is not null)
         {
+            // 同启动路径：每个 setter 都会在启用状态下立刻 CheckTimeAndApply()，
+            // 顺序赋值会让第一个 LightStart 带着「半新半旧」的配置抢先触发一次切换。
+            // 先关掉自动，全部写完再按用户设置恢复。
+            _theme.AutoTimeEnabled = false;
             if (TimeSpan.TryParse(_settings.LightStartTime, out var lt)) _theme.LightStart = lt;
             if (TimeSpan.TryParse(_settings.DarkStartTime, out var dt)) _theme.DarkStart = dt;
+            _theme.DayPlan = new ThemePlan { IsLight = _settings.DayThemeLight, Tone = _settings.DayAcrylicTone };
+            _theme.NightPlan = new ThemePlan { IsLight = _settings.NightThemeLight, Tone = _settings.NightAcrylicTone };
+            _theme.ApplySystemTheme = _settings.AutoTimeApplySystemTheme;
             _theme.AutoTimeEnabled = _settings.AutoTimeTheme;
+
+            // 配置改完后，让任务栏/浮岛的色调立刻跟上新方案（例如刚把夜晚色调改成别的）
+            ApplyToneForCurrentPlan(force: true);
         }
 
         if (_settings.TranslucentTaskbar)
-            TaskbarService.ApplyStyle(_settings.TaskbarStyle, _settings.AcrylicTone);
+        {
+            try { TaskbarService.ApplyStyle(_settings.TaskbarStyle, EffectiveTone); } catch (Exception ex) { Services.Log.Error($"SaveSettings ApplyStyle failed: {ex.Message}"); }
+        }
         else
             TaskbarService.StopIslandWatch();
 

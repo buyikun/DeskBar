@@ -15,6 +15,7 @@ internal static class NativeMethods
     private const string Kernel32 = "kernel32.dll";
     private const string Advapi32 = "advapi32.dll";
     private const string Shell32 = "shell32.dll";
+    private const string Dwmapi = "dwmapi.dll";
 
     // ---- 窗口查找 ----
     [DllImport(User32, CharSet = CharSet.Unicode, SetLastError = true)]
@@ -105,6 +106,43 @@ internal static class NativeMethods
     [DllImport(User32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    /// <summary>
+    /// 取窗口的「扩展边框」矩形。Win11 上 GetWindowRect 会把不可见的拖拽边框算进去，
+    /// 导致任务栏实际可见高度比返回值小 1-3px，浮岛会贴出边界或压住图标。
+    /// DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS=9) 返回的是真实绘制区域。
+    /// 对应 WaterSprite `shell-bridge.ps1:81` 的 Bounds 实现。
+    /// </summary>
+    [DllImport(Dwmapi)]
+    public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+
+    public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
+    /// <summary>
+    /// 优先用 DWM 扩展边框，失败时回退 GetWindowRect。
+    /// 结果为空矩形（right&lt;=left 或 bottom&lt;=top）时同样回退。
+    /// </summary>
+    public static bool TryGetWindowBounds(IntPtr hWnd, out RECT rect)
+    {
+        if (hWnd == IntPtr.Zero)
+        {
+            rect = default;
+            return false;
+        }
+
+        try
+        {
+            if (DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, out var dwm, Marshal.SizeOf<RECT>()) == 0
+                && dwm.right > dwm.left && dwm.bottom > dwm.top)
+            {
+                rect = dwm;
+                return true;
+            }
+        }
+        catch { }
+
+        return GetWindowRect(hWnd, out rect) && rect.right > rect.left && rect.bottom > rect.top;
+    }
 
     public const int RGN_AND = 1;
     public const int RGN_OR = 2;

@@ -11,11 +11,12 @@
         Topmost="True"
         Focusable="False"
         Width="220" Height="48">
-    <!-- 单一细线，与音乐胶囊 / 系统信息浮岛用同一个颜色与圆角。 -->
+    <!-- 单一细线，与音乐胶囊 / 系统信息浮岛用同一个颜色与圆角。
+         描边色按 tone 在代码里下发（浅色柔雾走黑色系、深色黑丝走白色系），
+         这里不给硬编码默认值，免得第一次绘制闪一下错误的颜色。 -->
     <Border x:Name="Edge"
             CornerRadius="24"
             BorderThickness="1"
-            BorderBrush="#38000000"
             Background="Transparent"
             IsHitTestVisible="False" />
 </Window>

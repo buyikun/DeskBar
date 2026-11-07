@@ -3,7 +3,7 @@ using Microsoft.Win32;
 namespace DeskBar.Services;
 
 /// <summary>
-/// 跟随系统主题。
+/// 主题时间表 + 系统深浅色跟随。
 /// 关键：用 RegNotifyChangeKeyValue 监听 Themes\Personalize，而不是轮询。
 /// 参考 AutoDarkMode 的 RegistryHandler 思路（GPL-3.0，仅借鉴机制，未复制代码）。
 /// </summary>
@@ -19,11 +19,18 @@ internal sealed class ThemeService : IDisposable
     private CancellationTokenSource? _cts;
     private System.Threading.Timer? _scheduleTimer;
     private volatile bool _autoTimeEnabled = true;
-    private TimeSpan _lightStart = new(7, 0, 0);
-    private TimeSpan _darkStart = new(19, 0, 0);
+    private volatile bool _applySystemTheme = true;
+    private TimeSpan _dayStart = new(7, 0, 0);
+    private TimeSpan _nightStart = new(19, 0, 0);
+    private ThemePlan _dayPlan = new() { IsLight = true, Tone = "softmist" };
+    private ThemePlan _nightPlan = new() { IsLight = false, Tone = "sheertights" };
+    private ThemePlan? _appliedPlan;
 
-    /// <summary>主题变化时触发（参数为 true = 浅色）。在后台线程上触发。</summary>
+    /// <summary>系统深浅色被外部改动时触发（参数为 true = 浅色）。在后台线程上触发。</summary>
     public event Action<bool>? ThemeChanged;
+
+    /// <summary>时段方案生效时触发：自动切换或用户改了白天/夜晚配置都会走这里。在定时器/后台线程上触发。</summary>
+    public event Action<ThemePlan>? PlanApplied;
 
     public bool AutoTimeEnabled
     {
@@ -32,28 +39,72 @@ internal sealed class ThemeService : IDisposable
         {
             _autoTimeEnabled = value;
             if (value) CheckTimeAndApply();
+            else _appliedPlan = null;
         }
+    }
+
+    /// <summary>自动切换时是否连 Windows 全局深浅色一起改。</summary>
+    public bool ApplySystemTheme
+    {
+        get => _applySystemTheme;
+        set => _applySystemTheme = value;
     }
 
     public TimeSpan LightStart
     {
-        get => _lightStart;
+        get => _dayStart;
         set
         {
-            _lightStart = value;
+            _dayStart = value;
             if (_autoTimeEnabled) CheckTimeAndApply();
         }
     }
 
     public TimeSpan DarkStart
     {
-        get => _darkStart;
+        get => _nightStart;
         set
         {
-            _darkStart = value;
+            _nightStart = value;
             if (_autoTimeEnabled) CheckTimeAndApply();
         }
     }
+
+    /// <summary>白天时段的方案（是否浅色 + 任务栏色调）。</summary>
+    public ThemePlan DayPlan
+    {
+        get => _dayPlan;
+        set
+        {
+            _dayPlan = value;
+            if (_autoTimeEnabled) CheckTimeAndApply();
+        }
+    }
+
+    /// <summary>夜晚时段的方案。</summary>
+    public ThemePlan NightPlan
+    {
+        get => _nightPlan;
+        set
+        {
+            _nightPlan = value;
+            if (_autoTimeEnabled) CheckTimeAndApply();
+        }
+    }
+
+    /// <summary>给定时刻应生效的方案（供设置页展示“当前时段”）。</summary>
+    public ThemePlan PlanAt(DateTime when) => ThemeSchedule.Resolve(
+        when.TimeOfDay, _dayStart, _nightStart, _dayPlan, _nightPlan);
+
+    /// <summary>当前时刻是否处于白天段。</summary>
+    public bool IsDayNow => ThemeSchedule.IsDay(DateTime.Now.TimeOfDay, _dayStart, _nightStart);
+
+    public (DateTime At, ThemePlan Plan) NextSwitch() => ThemeSchedule.NextSwitch(
+        DateTime.Now, _dayStart, _nightStart, _dayPlan, _nightPlan);
+
+    /// <summary>下一次切换前需要等待的时长；关掉自动切换时返回 null。</summary>
+    public TimeSpan? TimeUntilNextSwitch()
+        => _autoTimeEnabled ? NextSwitch().At - DateTime.Now : null;
 
     public void StartScheduleTimer(int initialDelayMs = 6000)
     {
@@ -67,27 +118,40 @@ internal sealed class ThemeService : IDisposable
         if (!_autoTimeEnabled) return;
         try
         {
-            var now = DateTime.Now.TimeOfDay;
-            bool shouldBeLight;
-            if (_lightStart < _darkStart)
+            var plan = PlanAt(DateTime.Now);
+
+            // 短路条件除了「方案没变」，还要求「系统当前深浅色已经和方案一致」。
+            // 只看方案会在写注册表失败（非提权、被组策略挡住）后永远不再重试。
+            var systemMatches = !_applySystemTheme || GetSystemUsesLightTheme() == plan.IsLight;
+            if (_appliedPlan is not null && _appliedPlan.Equals(plan) && systemMatches) return;
+
+            // 只在真的需要时才写注册表并广播，避免每 30 秒无谓唤醒整个系统
+            if (_applySystemTheme && !systemMatches)
             {
-                shouldBeLight = now >= _lightStart && now < _darkStart;
-            }
-            else
-            {
-                shouldBeLight = !(now >= _darkStart || now < _lightStart);
+                Log.Info($"AutoTheme: switched to {(plan.IsLight ? "Light" : "Dark")} plan={plan}");
+                SetTheme(plan.IsLight);
             }
 
-            var currentIsLight = GetSystemUsesLightTheme();
-            if (shouldBeLight != currentIsLight)
-            {
-                Log.Info($"AutoTheme: time {now:hh\\:mm} reached, auto switching system to {(shouldBeLight ? "Light" : "Dark")}");
-                SetTheme(shouldBeLight);
-            }
+            _appliedPlan = plan;
+            PlanApplied?.Invoke(plan);
         }
         catch (Exception ex)
         {
             Log.Error($"CheckTimeAndApply failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>用户点「立即应用」时强制走一遍，忽略“方案未变化”的短路。</summary>
+    public void ForceApplyNow()
+    {
+        _appliedPlan = null;
+        CheckTimeAndApply();
+        if (_appliedPlan is null)
+        {
+            // 自动切换是关的：仍然把当前时段方案交给界面
+            var plan = PlanAt(DateTime.Now);
+            _appliedPlan = plan;
+            PlanApplied?.Invoke(plan);
         }
     }
 
