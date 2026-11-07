@@ -1,0 +1,38 @@
+# Build & Publish
+**/bin/
+**/obj/
+**/out_publish/
+**/pub_all/
+**/.stage/
+**/.temp/
+**/.tmp/
+**/temp/
+**/tmp/
+**/_backup_*/
+**/_probe/
+
+# IDE & Runtime Caches
+.vs/
+*.user
+*.suo
+*.log
+build.log
+.dotnet/
+.dotnethome/
+.dotnet_home/
+.nuget/
+.appdata/
+.localappdata/
+.userprofile/
+appdata/
+
+# Temporary test media & artifacts
+*.mp3
+*.ppm
+vidframes/
+vid_frames2/
+vidgrab/
+trace*.txt
+widget_trace.txt
+verify-out/
+test_zip_extract/

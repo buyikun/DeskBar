@@ -1,0 +1,188 @@
+<Window x:Class="DeskBar.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DeskBar 设置" Height="640" Width="520"
+        Icon="pack://application:,,,/DeskBar;component/app.ico"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource WindowBackground}"
+        Foreground="{DynamicResource ForegroundBrush}"
+        FontFamily="Microsoft YaHei UI" FontSize="13">
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}" />
+        </Style>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource CardBackground}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,6" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <TextBlock Text="DeskBar" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock Text="任务栏透明 · 系统自动主题 · 桌面图标 一体化增强"
+                       Foreground="{DynamicResource SubTextBrush}" FontSize="12" Margin="0,3,0,0" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="任务栏与桌面" Foreground="{DynamicResource SubTextBrush}"
+                           FontSize="12" Margin="2,0,0,8" />
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <CheckBox x:Name="ChkDoubleClick" Content="双击桌面空白切换图标显隐"
+                                  Checked="OnDoubleClickChanged" Unchecked="OnDoubleClickChanged" />
+                        
+                        <CheckBox x:Name="ChkTranslucentTaskbar" Content="启用任务栏增强效果"
+                                  Checked="OnTranslucentTaskbarChanged" Unchecked="OnTranslucentTaskbarChanged" Margin="0,6,0,4" />
+                        
+                        <StackPanel Orientation="Horizontal" Margin="22,2,0,4">
+                            <TextBlock Text="外观样式：" VerticalAlignment="Center" Width="70" />
+                            <ComboBox x:Name="CmbTaskbarStyle" Width="220" SelectionChanged="OnTaskbarStyleChanged">
+                                <ComboBoxItem Content="部分亚克力 (居中岛屿 + 托盘岛屿)" Tag="island_acrylic" />
+                                <ComboBoxItem Content="全透明 (整条透出壁纸)" Tag="clear" />
+                                <ComboBoxItem Content="全亚克力 (整条毛玻璃)" Tag="acrylic" />
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="22,4,0,4">
+                            <TextBlock Text="亚克力色调：" VerticalAlignment="Center" Width="70" />
+                            <ComboBox x:Name="CmbAcrylicTone" Width="220" SelectionChanged="OnAcrylicToneChanged">
+                                <ComboBoxItem Content="原味自然亚克力 (图中同款 · 经典透壁纸)" Tag="natural" />
+                                <ComboBoxItem Content="浅色白玉磨砂 (清爽透亮)" Tag="light" />
+                                <ComboBoxItem Content="深色黑曜石 (暗色沉稳)" Tag="dark" />
+                                <ComboBoxItem Content="随系统自动 (昼浅夜深自适应)" Tag="auto" />
+                            </ComboBox>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="系统自动主题 (随时间切换深浅色)" Foreground="{DynamicResource SubTextBrush}"
+                           FontSize="12" Margin="2,8,0,8" />
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <CheckBox x:Name="ChkAutoTimeTheme" Content="启用随时间自动切换系统深浅色"
+                                  Checked="OnAutoTimeThemeChanged" Unchecked="OnAutoTimeThemeChanged" />
+                        
+                        <Grid Margin="0,6,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="20" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="70" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="浅色开始：" VerticalAlignment="Center" />
+                            <TextBox x:Name="TxtLightTime" Grid.Column="1" Text="07:00" Height="24"
+                                     VerticalContentAlignment="Center" TextAlignment="Center"
+                                     TextChanged="OnTimeConfigChanged" />
+                            <TextBlock Grid.Column="3" Text="深色开始：" VerticalAlignment="Center" />
+                            <TextBox x:Name="TxtDarkTime" Grid.Column="4" Text="19:00" Height="24"
+                                     VerticalContentAlignment="Center" TextAlignment="Center"
+                                     TextChanged="OnTimeConfigChanged" />
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,2">
+                            <Button Content="切换系统为浅色" Padding="8,3" Click="OnManualSwitchLight" />
+                            <Button Content="切换系统为深色" Padding="8,3" Margin="8,0,0,0" Click="OnManualSwitchDark" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="TxtThemeStatus" Foreground="{DynamicResource SubTextBrush}"
+                                   FontSize="12" Margin="0,8,0,0" Text="当前系统：正在读取..." />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="常规设置" Foreground="{DynamicResource SubTextBrush}"
+                           FontSize="12" Margin="2,8,0,8" />
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <CheckBox x:Name="ChkStartup" Content="开机启动"
+                                  Checked="OnStartupChanged" Unchecked="OnStartupChanged" />
+                        <CheckBox x:Name="ChkShowTray" Content="显示托盘图标（隐藏时可通过运行 DeskBar 呼出）"
+                                  Checked="OnShowTrayChanged" Unchecked="OnShowTrayChanged" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="任务栏音乐胶囊" Foreground="{DynamicResource SubTextBrush}"
+                           FontSize="12" Margin="2,8,0,8" />
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <CheckBox x:Name="ChkMusicCapsule" Content="启用任务栏音乐胶囊（托盘左侧显示封面与曲目）"
+                                  Checked="OnMusicCapsuleChanged" Unchecked="OnMusicCapsuleChanged" />
+                        <CheckBox x:Name="ChkMusicAutoHide" Content="无播放时自动隐藏（保持任务栏紧凑，不留空白占位）"
+                                  Checked="OnMusicAutoHideChanged" Unchecked="OnMusicAutoHideChanged" />
+                        <CheckBox x:Name="ChkMusicControls" Content="显示上一曲 / 播放暂停 / 下一曲按钮"
+                                  Checked="OnMusicControlsChanged" Unchecked="OnMusicControlsChanged" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,2">
+                            <TextBlock Text="播放器白名单" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource SubTextBrush}" />
+                            <TextBox x:Name="TxtMusicWhitelist" Width="240" Height="24" Margin="10,0,0,0"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="留空=接受所有播放器；多个用逗号分隔"
+                                     TextChanged="OnMusicWhitelistChanged" />
+                        </StackPanel>
+                        <TextBlock Text="留空表示接受全部播放器；可填 QQMusic / cloudmusic / Spotify 等关键字（逗号分隔）。"
+                                   FontSize="11" Foreground="{DynamicResource SubTextBrush}"
+                                   Margin="0,2,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="任务栏系统监控" Foreground="{DynamicResource SubTextBrush}"
+                           FontSize="12" Margin="2,8,0,8" />
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <CheckBox x:Name="ChkSystemMonitor" Content="启用任务栏左侧硬件监控（CPU / 内存 / 网络 / GPU / 磁盘）"
+                                  Checked="OnSystemMonitorChanged" Unchecked="OnSystemMonitorChanged" />
+                        <TextBlock Text="数据来自 Windows 原生接口，每秒刷新一次，不注入任何进程；不可用的项目会自动隐藏。"
+                                   FontSize="11" Foreground="{DynamicResource SubTextBrush}"
+                                   Margin="0,4,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="运行日志与系统诊断" Foreground="{DynamicResource SubTextBrush}"
+                           FontSize="12" Margin="2,8,0,8" />
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <CheckBox x:Name="ChkDebugLog" Content="记录运行调试日志 (仅排查问题时开启，默认关闭免写盘)"
+                                  Checked="OnDebugLogChanged" Unchecked="OnDebugLogChanged" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,3">
+                            <Button Content="打开日志目录" Padding="8,3" Click="OnOpenLogDir" />
+                            <Button Content="清空日志" Padding="8,3" Margin="8,0,0,0" Click="OnClearLogs" />
+                            <Button x:Name="BtnToggleIcons" Content="立即切换桌面图标" Padding="8,3" Margin="8,0,0,0"
+                                    Click="OnToggleIconsNow" />
+                            <Button x:Name="BtnProbe" Content="探测系统层级" Padding="8,3" Margin="8,0,0,0"
+                                    Click="OnProbeWindows" />
+                        </StackPanel>
+                        <TextBlock x:Name="TxtProbe" FontFamily="Consolas" FontSize="11"
+                                   Foreground="{DynamicResource SubTextBrush}"
+                                   Margin="0,8,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="隐藏到托盘" Width="90" Height="30" Margin="0,0,10,0" Click="OnHideToTray" />
+            <Button Content="关闭" Width="70" Height="30" Click="OnClose" />
+        </StackPanel>
+    </Grid>
+</Window>
