@@ -19,10 +19,12 @@
 
     <Border x:Name="RootBorder"
             CornerRadius="9"
-            Background="Transparent"
+            Background="#01000000"
             BorderBrush="#38000000"
             BorderThickness="1"
-            Padding="10,0">
+            Padding="10,0"
+            Cursor="Hand"
+            ToolTip="点击查看硬件概览与高占用进程排行">
         <StackPanel x:Name="PanelItems"
                     Orientation="Horizontal"
                     HorizontalAlignment="Left"

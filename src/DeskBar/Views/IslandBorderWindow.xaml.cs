@@ -148,7 +148,7 @@ public partial class IslandBorderWindow : Window
             if (island != _islandStyle)
             {
                 _islandStyle = island;
-                var rad = island ? new CornerRadius(18, 18, 0, 0) : new CornerRadius(9);
+                var rad = island ? new CornerRadius(24) : new CornerRadius(24);
                 Edge.CornerRadius = rad;
             }
 

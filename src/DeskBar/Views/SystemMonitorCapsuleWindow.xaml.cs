@@ -35,6 +35,8 @@ public partial class SystemMonitorCapsuleWindow : Window
     // 16ms 轻量 z 序守卫：整条模式下浮岛不再挖洞，靠它保持压在任务栏之上。
     private DispatcherTimer? _zGuard;
     private bool _isDisposed;
+    private SystemMonitorDetailWindow? _detailWindow;
+    private SystemMetrics? _latestMetrics;
 
     internal SystemMonitorCapsuleWindow(AppSettings settings)
     {
@@ -42,11 +44,14 @@ public partial class SystemMonitorCapsuleWindow : Window
         InitializeComponent();
         Title = "DeskBarSystemMonitor";
         SourceInitialized += OnSourceInitialized;
+        RootBorder.MouseLeftButtonUp += (_, _) => ToggleDetailWindow();
         Closed += (_, _) =>
         {
             _isDisposed = true;
             StopPositionTimer();
             StopZGuard();
+            try { _detailWindow?.Close(); } catch { }
+            _detailWindow = null;
             if (_service != null)
             {
                 _service.MetricsChanged -= OnMetricsChanged;
@@ -127,6 +132,12 @@ public partial class SystemMonitorCapsuleWindow : Window
                 // 这里不能直接 ShowPanel()：数值每秒刷新一次，直接显示会绕过
                 // UpdateVisibility() 的让位判定，任务栏被隐藏时浮岛仍被强行拉回来。
                 UpdateVisibility();
+
+                _latestMetrics = m;
+                if (_detailWindow != null && _detailWindow.IsVisible)
+                {
+                    _detailWindow.UpdateMetrics(m);
+                }
             }
             catch (Exception ex)
             {
@@ -181,6 +192,7 @@ public partial class SystemMonitorCapsuleWindow : Window
 
     private void HidePanel()
     {
+        try { _detailWindow?.CloseWithAnimation(); } catch { }
         TaskbarService.ClearWidgetExclusion("monitor");
         _shown = false;
         if (!IsVisible)
@@ -361,6 +373,37 @@ public partial class SystemMonitorCapsuleWindow : Window
         RefreshBackground();
         RepositionWindow();
         AcrylicWindowHelper.BindToTaskbarLayer(this);
+    }
+
+    private void ToggleDetailWindow()
+    {
+        if (_detailWindow != null && _detailWindow.IsVisible)
+        {
+            _detailWindow.CloseWithAnimation();
+            return;
+        }
+
+        if (_detailWindow == null)
+        {
+            _detailWindow = new SystemMonitorDetailWindow(_settings);
+        }
+
+        if (_latestMetrics != null)
+        {
+            _detailWindow.UpdateMetrics(_latestMetrics);
+        }
+
+        var hwnd = new WindowInteropHelper(this).Handle;
+        int scale = GetDpiForWindow(hwnd);
+        double dpi = scale <= 0 ? 1.0 : scale / 96.0;
+
+        double leftDip = _lastX / dpi;
+        double topDip = _lastY / dpi;
+        double widthDip = ActualWidth > 0 ? ActualWidth : 160;
+        double heightDip = ActualHeight > 0 ? ActualHeight : 48;
+
+        var rect = new Rect(leftDip, topDip, widthDip, heightDip);
+        _detailWindow.ShowAtCapsule(rect);
     }
 
     // ---------------- Win32 ----------------

@@ -14,4 +14,4 @@ $env:DOTNET_ROOT = "D:\ai\deskbar\.dotnet"
 $env:NUGET_PACKAGES = "D:\ai\deskbar\.dotnet_home\.nuget\packages"
 $env:PATH = "D:\ai\deskbar\.dotnet;" + $env:PATH
 
-& "D:\ai\deskbar\.dotnet\dotnet.exe" build src/DeskBar/DeskBar.csproj -c Release -p:UseSharedCompilation=false -v:normal -fl -flp:logfile=build.log
+& "D:\ai\deskbar\.dotnet\dotnet.exe" build src/DeskBar/DeskBar.csproj -c Release -p:UseSharedCompilation=false -v:diag -fl "-flp:logfile=build_diag.log;verbosity=diagnostic"

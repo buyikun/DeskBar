@@ -13,7 +13,7 @@
         Width="220" Height="48">
     <!-- 单一细线，与音乐胶囊 / 系统信息浮岛用同一个颜色与圆角。 -->
     <Border x:Name="Edge"
-            CornerRadius="9"
+            CornerRadius="24"
             BorderThickness="1"
             BorderBrush="#38000000"
             Background="Transparent"
