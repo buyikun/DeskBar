@@ -142,6 +142,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1
 - **保持原行尾**：仓库内 `.cs` / `.xaml` 普遍是 CRLF，改前检测，写回沿用，禁止混入 LF。
 - **编码保护**：`AppSettings.cs` 等文件含中文 XML 注释，禁用外部重格式化工具整体覆盖。
 - **`.ps1` 脚本禁止出现任何非 ASCII 字符**（含中文注释）。Windows PowerShell 5.1 对无 BOM 的 `.ps1` 按 OEM/ANSI 解码，中文会直接 `ParserError`。`sync-frontend.ps1` 文件头就写死了这条约束。
+- **删除目录前必须展开看内容，不能靠目录名推断归属**。曾把 `C:\Users\Administrator\.local` 判为 uv 残留、准备整个删除，展开后发现它是 billion-context 的图片缓存（`state\billion-context\retrieve\img\session-*\`）加 opencode 的 `state\opencode\service.json`。`.local` / `.config` / `.cache` 这类约定俗成目录会被多个工具共用，**`.local\bin` 为空不代表整个 `.local` 可删**。同理，`D:\app\<name>` 这类手工收纳目录里也可能混着别人的东西。
 
 ### 4.2 任务栏裁剪与 Z 序
 - **`SetWindowPos(hwnd, X, ...)` 是把 `hwnd` 插到 `X` 的正下方**（即 `X` 盖在上面）。要放到任务栏上方，得插到「任务栏上方那个窗口」的正下方——用 `AcrylicWindowHelper.TaskbarLayerAnchor()` 取锚点。
@@ -215,6 +216,52 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1
 - 副实例退出必须走 `Environment.Exit(0)`，**绝不能执行 `OnExit` 的清理逻辑**——否则会把主实例的任务栏区域与托盘状态一并破坏。
 - 浮岛自愈靠 `IsWindow(h)` 判定（句柄曾存在但现在失效才是真死），并**限速 5 秒一次全量重建**。未 Show / Handle 尚未初始化的窗口绝不是 dead，判错会无限重构。
 - `WM_TASKBARCREATED` 只注册、未消费；真正的自愈走上面的 2 秒轮询。不要以为挂了消息处理。
+
+### 4.9 进程托管：从 AI 宿主启动的 DeskBar 会被连带杀死
+
+**现象**：用 `deploy.sh` 启动 DeskBar 后，只要退出 DSH，DeskBar 立刻消失。重新登录前它都不会回来。
+
+**根因**：Windows **Job Object** 连带终止。从 DSH 派生的进程全部落在同一个 Job 内（实测 `IsProcessInJob` 返回 `True`），该 Job 带 `KILL_ON_JOB_CLOSE` 语义 —— 宿主退出时关闭 Job 句柄，系统就把 Job 内所有进程一并强杀。DeskBar 作为 `DSH → bash → powershell → DeskBar` 这条链的后代，继承了该 Job 归属。
+
+**日志判据**：job 强杀**不走** `OnExit`。`logs\deskbar-YYYYMMDD.log` 若在正常 tick 中**突然中断且没有 `DeskBar exiting` 那一行**，就是被系统强杀，不是自身崩溃。这条判据可区分「崩溃」与「被宿主带走」。
+
+**正确启动方式**：必须用 WMI `Win32_Process::Create`（`deploy.sh` 已改），**不要用 `Start-Process` / `cmd start` / 直接 `& .\DeskBar.exe`**。
+
+```powershell
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create `
+  -Arguments @{CommandLine='D:\app\DeskBar\DeskBar.exe'}
+```
+
+WMI 创建的进程由 `WmiPrvSE.exe` 派生，不在当前进程的 Job 里，因此能独立存活。**验证方法**：`Get-CimInstance Win32_Process -Filter "Name='DeskBar.exe'"` 看到的 `ParentProcessId` 应指向 `WmiPrvSE.exe`；若父进程是 `powershell.exe` / `bash.exe` / `node.exe`，说明仍在宿主进程链上，宿主一退就会被带走。
+
+**不影响的部分**：`HKCU\...\Run` 里已有 DeskBar 自启动项，登录后能正常起来 —— 所以这个问题只在「我部署完、没重新登录」的窗口期内暴露。这也解释了为什么它看起来是间歇性的。
+
+### 4.10 发版：Git Tag ≠ GitHub Release
+
+**最容易犯的错误**：`git tag vX.Y.Z` + `git push --tags` 只是把标签推上去了，**不会**产生 GitHub Release，也不会自动打包上传 zip。
+
+后果是双向的：
+- GitHub 仓库首页的 `Releases` 侧边栏仍显示上一个版本；
+- **软件内「检查更新」读的是 Releases API**（`UpdateService` 走 `releases/latest`），完全看不到新 tag —— 用户点了检查更新会被告知「已是最新版本」。
+
+**完整发版流程（五步，缺一不可）**：
+
+1. 改 `src/DeskBar/DeskBar.csproj` 的 `<Version>` → `build.ps1` → `publish.ps1` → `deploy.sh` 验证；
+2. `git add` → `git commit` → `git tag vX.Y.Z` → `git push origin master --tags`；
+3. 打包 `out_publish/*` 为 `DeskBar-vX.Y.Z-win-x64.zip`（Compress-Archive，排除目录本身）；
+4. **调 API 建 Release**：`POST https://api.github.com/repos/buyikun/DeskBar/releases`，body 含 `tag_name` / `name` / `body` / `draft:false` / `prerelease:false`；
+5. **上传资产**：把返回的 `upload_url` 截掉 `{?name,label}` 后缀，`POST <upload_url>?name=DeskBar-vX.Y.Z-win-x64.zip`，`Content-Type: application/zip`，`--data-binary @本地zip`。
+
+**验收判据（必须实际查，不能凭脚本"看起来成功"就宣布完成）**：
+
+```bash
+curl -s https://api.github.com/repos/buyikun/DeskBar/releases/latest | grep -o '"tag_name": "[^"]*"'
+```
+应返回新版本号；再确认 `assets[].state == "uploaded"` 且 `size` 与本地 zip 一致。
+
+**踩过的坑（本机实测）**：
+- **不要在 bash 里手写含 `{` / `$` 的 JSON**。`upload_url` 里的 `{?name,label}`、`body` 里的 markdown 都会让 PowerShell/ bash 解析器提前截断，命令**静默失败或退出码非 0 但被忽略**，于是出现「我报告已发布，实际 API 里根本没有」的假成功。**JSON 一律写进独立文件，用 `--data-binary @file`**。
+- 曾因此对用户谎报「已创建 Release」，直到用户拿出截图质疑才去查 API 发现 latest 仍是旧版本。**发布这类外部副作用操作，汇报前必须先读回真值。**
 
 ---
 
