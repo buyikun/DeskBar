@@ -187,6 +187,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1
 - **QRC 的 DES 位序与 KRC 的 16 字节常量是格式常量**，换成标准 TripleDES / 标准 XOR 一定解不出。
 - **封面只能经 `SafeArtwork.DownloadAsync`**：强制 https、拒私网与 DNS 重绑定、重定向 ≤3 跳、体积 ≤1MB、魔数验真类型。封面 URL 来自第三方接口，属不可信输入，绕过就是 SSRF 面。
 - **禁止为封面新建磁盘缓存目录**。现有设计是实时下载 → 内存解码 → `Freeze()` → 交 GC，保障零额外磁盘 I/O。
+- **WPF `BitmapImage` 解不了带 EXIF(APP1) 的 JPEG，报错原文是「无法从流中读取」**——这个措辞会把排查引向网络或流，实际是解码器拒绝。`MediaSessionService.LoadBitmapFromBytes` 失败时先走 `StripApp1Segment` 剥掉 APP1 重试；GSMTC 缩略图与本地封面共用这条路径，别只修一处。
+- **读 GSMTC 缩略图流必须按 `LoadAsync` 的实际返回值建数组**，不得用 `streamRef.Size` 声明长度：Windows 侧可能短投递，按声明长度 `ReadBytes` 必抛异常。
+- **QQ 音乐封面缓存按「歌手_专辑_编号.jpg」命名，编号是分辨率档位**（实测 `_4`=500×500、`_0`=150×150），存在 `QQMusicPicture`。匹配必须用 `归一化(歌手)+归一化(专辑)` 全等，**不得退回「标题 contains」**——只有专辑名恰好等于歌名时才碰巧命中（《幻听》的专辑是「梦游计」，用歌名永远匹配不到）。`props.AlbumTitle` 在 QQ 音乐下有值，是这套判据的前提。多档位候选取编号最大的那张。
+- **`TryGetLocalCover` 的缓存必须连失败结果一起缓存**（成功 30min / 失败 5min / 上限 64 条）。只缓存成功会让「这首歌没有封面」随每次刷新重扫目录。
+- 上述封面兜底判据与缓存策略借鉴 WaterSprite-TaskbarMediaBar（`cache-media.cjs:14,40` 的专辑匹配与占位图排除、`kuwo-artwork.cjs:24,38` 的失败短缓存与容量淘汰、`cover-reader.cs:22-39` 的流读取写法）。再借鉴它时先 clone 读实现。
 - **位图跨线程前必须 `Freeze()`**；后台回到 UI 必须 `Dispatcher.CheckAccess()` / `BeginInvoke`。
 - 定时器（16ms 滚动、16ms ZGuard、50ms 跟随、120ms 悬停、400ms 定位、100ms 歌词）**在 `Closed` 里必须全部 `Stop()` 并解绑事件**，否则向已 Close 的窗口 `Show()` 会抛 `InvalidOperationException`。
 - `NOACTIVATE` 窗口下 `MouseEnter` / `MouseLeave` 不可靠，悬停只能轮询光标坐标。
