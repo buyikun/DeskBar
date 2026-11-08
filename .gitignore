@@ -45,3 +45,84 @@ test_zip_extract/
 /shot*.png
 /_release_body.json
 
+# 历史调试证据链（AGENTS.md §3「测试现状」/:295 明令禁止清理，但体积大且一次性）
+# 这些是当轮排查的产物，留在磁盘供追溯，不入库。
+/assets/
+/shots/
+/recon/
+/.recon/
+/*.png
+/crop_*.ps1
+/debug_*.ps1
+/parse*.ps1
+/dump_*.ps1
+/probe_*.ps1
+
+# 根目录一次性探针脚本（构建链只认 build.ps1 / publish.ps1 / deploy.sh / sync-frontend.ps1 / shot_taskbar.ps1）
+/burst_fullscreen.ps1
+/calc_tray_bounds.ps1
+/check_*.ps1
+/click_*.ps1
+/combo_style.ps1
+/create_media_service.ps1
+/crop_tone.ps1
+/crop_zoom.ps1
+/edge_probe.ps1
+/enum_win.ps1
+/find_chevron*.ps1
+/fullscreen_test.ps1
+/grab_frames.ps1
+/inspect_asm.ps1
+/invoke_*.ps1
+/list_wins.ps1
+/menu_*.ps1
+/open_settings.ps1
+/overlay.ps1
+/ownertest.ps1
+/query_*.ps1
+/restore_settings.ps1
+/run_csc.ps1
+/run_decompiler.ps1
+/set_tone_shot.ps1
+/shot_btn.ps1
+/shot_desktop.ps1
+/shot_down.ps1
+/shot_full.ps1
+/shot_more.ps1
+/shot_nav.ps1
+/shot_page.ps1
+/shot_popup.ps1
+/shot_pw.ps1
+/shot_scroll.ps1
+/shot_settings.ps1
+/shot_toggle.ps1
+/shot_tone_verify.ps1
+/shot_top.ps1
+/shot.ps1
+/test_*.ps1
+/toggle_chevron.ps1
+/tray_*.ps1
+/uia_*.ps1
+/verify_*.ps1
+/verify_monitor_off.sh
+/zoom_crop.ps1
+/deploy.ps1
+/deploy2.ps1
+
+# 一次性清理脚本（本次会话产物）
+/.ops/stop-deskbar.ps1
+
+
+
+# scripts/ 与根目录探针是 AGENTS.md 定性的「调试证据链」，默认不入库。
+# 但 winlist.py / flick7.py 是 AGENTS.md §3 列出的辅助工具，用 glob 显式放行
+# （git 不会为「已被忽略的目录」内的子项评估取反规则，所以用 /scripts/* 而非 /scripts/）。
+/scripts/*
+!/scripts/winlist.py
+!/scripts/flick7.py
+
+# .agents/skills：只保留本项目相关的 sync-frontend，其余是别的项目的 skill 副本
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/sync-frontend/
