@@ -66,6 +66,7 @@
 - **媒体**：`MediaSessionService`（GSMTC 会话与封面）、`MediaSourceRouter`（选源打分）、`MediaWhitelist`（白名单解析）、`LyricService`（歌词调度）、`MediaCacheLocator`（播放器目录发现）、`KrcDecoder`、`QrcDecoder`、`SafeArtwork`、`PlayerWindowControl`
 - **硬件**：`SystemMonitorService`、`ProcessListMerger`
 - **系统集成**：`StartupService`（HKCU Run）、`DesktopIconService`、`DoubleClickToggle`、`AppIconHelper`、`Log`、`AppSettings`
+- **更新**：`UpdateService`（GitHub Releases latest 接口 + 加速前缀改写）。检查只在用户点击时发起，不做常驻轮询；开启自动检查时启动 8 秒后静默查一次，发现新版本只走托盘气泡、不弹窗。下载地址由 `UpdateAccelPrefix` 前缀改写，留空即直连 `https://github.com`；`api.github.com` 的 API 请求**不**经过加速站。
 
 ### 2.3 四浮岛模型
 1. **左：系统监控浮岛** `SystemMonitorCapsuleWindow` — CPU/GPU/内存/上下行网速；点击展开 `SystemMonitorDetailWindow`（Top5 进程）。
