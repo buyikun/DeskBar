@@ -268,9 +268,50 @@ internal static class UpdateService
             Directory.CreateDirectory(root);
             Directory.CreateDirectory(stagedDir);
 
-            progress?.Invoke("正在下载更新包…", 0);
-            if (!await DownloadFileAsync(assetUrl, zipPath, progress).ConfigureAwait(false))
-                return new DownloadResult { Error = "下载失败，请检查网络或更换加速前缀后重试。" };
+            // 依次尝试：加速站 → 直连 GitHub。
+            // 加速站在国内带宽极低（实测约 8KB/s，7MB 包要十几分钟且容易断），
+            // 因此必须有直连兜底；任何一条失败都清掉半截文件再换下一条。
+            var candidates = BuildDownloadCandidates(assetUrl);
+            Exception? lastError = null;
+            bool ok = false;
+
+            for (int i = 0; i < candidates.Count && !ok; i++)
+            {
+                var (url, label) = candidates[i];
+                progress?.Invoke($"正在下载（{label}）…", 0);
+                try
+                {
+                    if (File.Exists(zipPath)) File.Delete(zipPath);
+                    await DownloadFileAsync(url, zipPath, progress).ConfigureAwait(false);
+
+                    // 关键校验：能打开 zip 才算下载完整。
+                    // 加速站断流会留下「半个包」，只认文件存在会把坏包当成好包。
+                    progress?.Invoke("正在校验…", 100);
+                    using (var probe = System.IO.Compression.ZipFile.OpenRead(zipPath))
+                    {
+                        if (probe.Entries.Count == 0)
+                            throw new InvalidDataException("压缩包为空。");
+                    }
+                    ok = true;
+                    progress?.Invoke($"下载完成（{label}）", 100);
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Log.Warn($"update download via {label} failed: {ex.Message}");
+                    // 多条链路都失败时，才给用户看到错误
+                    if (i < candidates.Count - 1)
+                        progress?.Invoke($"「{label}」失败，切换备用通道…", 0);
+                }
+            }
+
+            if (!ok)
+                return new DownloadResult
+                {
+                    Error = lastError is null
+                        ? "下载失败，请检查网络后重试。"
+                        : "下载失败（已尝试加速与直连）：" + lastError.Message
+                };
 
             progress?.Invoke("正在解压…", 100);
             System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, stagedDir, overwriteFiles: true);
@@ -290,6 +331,34 @@ internal static class UpdateService
         }
     }
 
+    /// <summary>
+    /// 生成下载候选链路。
+    ///
+    /// 顺序刻意是「直连优先、加速站兜底」：本机实测直连 GitHub 约 3.9MB/s（7MB 包 1.8 秒完成），
+    /// 而加速站只有约 8KB/s 且容易断流（7MB 要十几分钟，还留下半个 zip）。
+    /// 加速通道的价值只在「直连完全不通」时才体现，所以它必须排在后面，而不是默认首选。
+    /// </summary>
+    private static List<(string Url, string Label)> BuildDownloadCandidates(string accelAssetUrl)
+    {
+        var list = new List<(string, string)>();
+        if (string.IsNullOrWhiteSpace(accelAssetUrl)) return list;
+
+        var url = accelAssetUrl.Trim();
+        var accelIdx = url.IndexOf("https://github.com/", StringComparison.OrdinalIgnoreCase);
+        if (accelIdx > 0)
+        {
+            // 形如 https://加速站/https://github.com/... → 取后半段作直连
+            var direct = url.Substring(accelIdx);
+            list.Add((direct, "GitHub 直连"));
+            list.Add((url, "加速通道"));
+        }
+        else
+        {
+            list.Add((url, "GitHub 直连"));
+        }
+        return list;
+    }
+
     /// <summary>下载文件的包内结果。</summary>
     public sealed class DownloadResult
     {
@@ -304,7 +373,9 @@ internal static class UpdateService
 
     private static async Task<bool> DownloadFileAsync(string url, string destPath, ProgressCallback? progress)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        // 加速站在国内带宽很低：实测 7MB 包约 8KB/s，需要十几分钟。
+        // 旧值 5 分钟会把正常下载掐断成「半个 zip」，因此放宽到 30 分钟。
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
         using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
