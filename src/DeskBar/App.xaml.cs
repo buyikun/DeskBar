@@ -193,6 +193,41 @@ public partial class App : System.Windows.Application
         });
 
         Services.Log.Info("DeskBar started");
+
+        // 启动后静默检查一次更新（仅当用户开启）。延迟 8 秒避开启动竞态，
+        // 全程不弹窗——只有设置页里手动检查才会展示结果。
+        if (_settings.AutoCheckUpdate)
+        {
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(8000);
+                try
+                {
+                    var result = await Services.UpdateService.CheckAsync(_settings.UpdateAccelPrefix);
+                    if (result.HasUpdate)
+                    {
+                        Services.Log.Info($"update available: v{result.LatestVersion} (current v{result.CurrentVersion})");
+                        _ = Dispatcher.BeginInvoke(new Action(() => NotifyUpdateAvailable(result)));                    }
+                }
+                catch (Exception ex)
+                {
+                    Services.Log.Debug($"auto update check failed: {ex.Message}");
+                }
+            });
+        }
+    }
+
+    /// <summary>自动检查发现新版本时，在托盘图标给出气泡提示（不打开任何窗口）。</summary>
+    private void NotifyUpdateAvailable(Services.UpdateService.CheckResult result)
+    {
+        try
+        {
+            _tray?.ShowUpdateBalloon(result.LatestVersion);
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Debug($"update balloon failed: {ex.Message}");
+        }
     }
 
     [System.Runtime.InteropServices.DllImport("psapi.dll")]

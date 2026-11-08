@@ -42,7 +42,7 @@ public partial class SettingsWindow : Window
     /// <summary>切换右侧内容页；只显示一个，其余折叠。</summary>
     private void ShowPage(UIElement page)
     {
-        foreach (var p in new UIElement[] { PageGeneral, PageAppearance, PageTheme, PageWidgets, PageDiag })
+        foreach (var p in new UIElement[] { PageGeneral, PageAppearance, PageTheme, PageWidgets, PageUpdate, PageDiag })
         {
             p.Visibility = ReferenceEquals(p, page) ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -63,6 +63,7 @@ public partial class SettingsWindow : Window
             else if (sender == NavAppearance) ShowPage(PageAppearance);
             else if (sender == NavTheme) ShowPage(PageTheme);
             else if (sender == NavWidgets) ShowPage(PageWidgets);
+            else if (sender == NavUpdate) ShowPage(PageUpdate);
             else if (sender == NavDiag) ShowPage(PageDiag);
         }), System.Windows.Threading.DispatcherPriority.Loaded);
     }
@@ -146,6 +147,12 @@ public partial class SettingsWindow : Window
 
         // 诊断
         ChkDebugLog.IsChecked = s.EnableDebugLog;
+
+        // 更新
+        ChkAutoCheckUpdate.IsChecked = s.AutoCheckUpdate;
+        TxtAccelPrefix.Text = s.UpdateAccelPrefix;
+        TxtUpdateCurrent.Text = "当前版本 v" + UpdateService.CurrentVersion;
+        UpdateAccelPreview();
 
         // 联动可见性 / 状态文案
         UpdateToneLockState();
@@ -889,6 +896,139 @@ public partial class SettingsWindow : Window
         {
             Log.Error($"probe failed: {ex.Message}");
             TxtProbe.Text = $"探测失败：{ex.Message}";
+        }
+    }
+
+    // ===================== 检查更新 =====================
+
+    private bool _checkingUpdate;
+
+    /// <summary>最近一次检查得到的安装包地址与 Release 页地址，供下载 / 打开按钮使用。</summary>
+    private string _lastAssetUrl = "";
+
+    private string _lastReleasePageUrl = "";
+
+    private async void OnCheckUpdate(object sender, RoutedEventArgs e)
+    {
+        if (_checkingUpdate) return;
+        _checkingUpdate = true;
+        BtnCheckUpdate.IsEnabled = false;
+        TxtUpdateStatus.Text = "正在检查…";
+        try
+        {
+            var result = await UpdateService.CheckAsync(App.Settings.UpdateAccelPrefix).ConfigureAwait(true);
+            ApplyUpdateResult(result);
+        }
+        finally
+        {
+            _checkingUpdate = false;
+            BtnCheckUpdate.IsEnabled = true;
+        }
+    }
+
+    private void ApplyUpdateResult(UpdateService.CheckResult r)
+    {
+        if (r.Error.Length > 0)
+        {
+            TxtUpdateStatus.Text = r.Error;
+            TxtUpdateStatus.Style = (Style)FindResource("WarnHint");
+            _lastAssetUrl = "";
+            _lastReleasePageUrl = "";
+            BtnDownloadUpdate.IsEnabled = false;
+            BtnOpenReleasePage.IsEnabled = false;
+            return;
+        }
+
+        TxtUpdateStatus.Style = (Style)FindResource("Hint");
+        _lastAssetUrl = r.AssetUrl;
+        _lastReleasePageUrl = r.ReleasePageUrl;
+
+        if (r.HasUpdate)
+        {
+            TxtUpdateStatus.Text = $"发现新版本 v{r.LatestVersion}（当前 v{r.CurrentVersion}）";
+            BtnDownloadUpdate.IsEnabled = r.AssetUrl.Length > 0;
+            BtnDownloadUpdate.Content = r.AssetName.Length > 0 ? "下载 " + r.AssetName : "下载更新";
+            BtnOpenReleasePage.IsEnabled = r.ReleasePageUrl.Length > 0;
+        }
+        else
+        {
+            TxtUpdateStatus.Text = $"已是最新版本（v{r.CurrentVersion}）。";
+            BtnDownloadUpdate.IsEnabled = false;
+            BtnDownloadUpdate.Content = "下载更新";
+            BtnOpenReleasePage.IsEnabled = r.ReleasePageUrl.Length > 0;
+        }
+
+        TxtUpdateNotes.Text = r.Notes.Length > 0 ? r.Notes : "该版本没有提供发行说明。";
+        Log.Info($"update check: latest={r.LatestVersion} current={r.CurrentVersion} hasUpdate={r.HasUpdate}");
+    }
+
+    private void OnAutoCheckUpdateChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        App.Settings.AutoCheckUpdate = ChkAutoCheckUpdate.IsChecked == true;
+        Persist();
+    }
+
+    private void OnAccelPrefixChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateAccelPreview();
+        if (_loading) return;
+        App.Settings.UpdateAccelPrefix = TxtAccelPrefix.Text.Trim();
+        Persist();
+    }
+
+    /// <summary>把当前前缀与一个示例 GitHub 地址拼出来，让用户直接看到改写效果。</summary>
+    private void UpdateAccelPreview()
+    {
+        // 用当前版本拼一个真实形状的下载地址作样例
+        var sample = $"https://github.com/buyikun/DeskBar/releases/download/v{UpdateService.CurrentVersion}/DeskBar-v{UpdateService.CurrentVersion}-win-x64.zip";
+        var prefix = TxtAccelPrefix.Text.Trim();
+        if (prefix.Length == 0)
+        {
+            TxtAccelPreview.Text = "当前为直连模式：" + sample;
+            return;
+        }
+        var applied = UpdateService.ApplyAccel(sample, prefix);
+        TxtAccelPreview.Text = "实际下载地址：" + applied;
+    }
+
+    private void OnResetAccelPrefix(object sender, RoutedEventArgs e)
+    {
+        TxtAccelPrefix.Text = UpdateService.DefaultAccelPrefix;
+    }
+
+    private void OnUseDirectGitHub(object sender, RoutedEventArgs e)
+    {
+        TxtAccelPrefix.Text = "";
+    }
+
+    private async void OnDownloadUpdate(object sender, RoutedEventArgs e)
+    {
+        if (BtnDownloadUpdate.IsEnabled == false) return;
+        var url = _lastAssetUrl;
+        if (url.Length == 0) return;
+        await OpenUrlAsync(url);
+    }
+
+    private void OnOpenReleasePage(object sender, RoutedEventArgs e)
+    {
+        var url = _lastReleasePageUrl;
+        if (url.Length == 0) return;
+        _ = OpenUrlAsync(url);
+    }
+
+    private static async Task OpenUrlAsync(string url)
+    {
+        try
+        {
+            await Task.Run(() => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+            {
+                UseShellExecute = true
+            }));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"open url failed: {ex.Message}");
         }
     }
 

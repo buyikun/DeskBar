@@ -160,6 +160,27 @@ internal sealed class TrayIconHost : IDisposable
     }
 
     /// <summary>运行时切托盘可见性。</summary>
+    /// <summary>
+    /// 自动检查更新发现新版本时，用托盘气泡提示。
+    /// 用气泡而不是弹窗：启动阶段弹窗会抢走焦点，而用户此刻通常没在操作 DeskBar。
+    /// </summary>
+    public void ShowUpdateBalloon(string latestVersion)
+    {
+        try
+        {
+            if (_icon is null || !_icon.Visible) return;
+            _icon.BalloonTipTitle = "DeskBar 有新版本";
+            _icon.BalloonTipText = $"v{latestVersion} 已发布。点击托盘图标打开设置 → 检查更新，即可下载。";
+            _icon.BalloonTipIcon = ToolTipIcon.Info;
+            _icon.ShowBalloonTip(5000);
+            Log.Info($"tray: update balloon shown for v{latestVersion}");
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"tray: update balloon failed: {ex.Message}");
+        }
+    }
+
     public void SetVisible(bool visible)
     {
         if (_icon is null) return;

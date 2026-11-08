@@ -64,6 +64,16 @@ internal sealed class AppSettings
     // ===== 硬件监控浮岛 =====
     public bool SystemMonitorEnabled { get; set; } = true;
 
+    // ===== 更新 =====
+    /// <summary>启动后是否自动检查一次更新（默认关闭，避免无谓的网络请求）。</summary>
+    public bool AutoCheckUpdate { get; set; } = false;
+
+    /// <summary>
+    /// 下载加速前缀。GitHub 直链在国内经常连不上，默认走 ghproxy 类中转。
+    /// 留空表示直连 https://github.com。用户可在设置页改成任意中转站。
+    /// </summary>
+    public string UpdateAccelPrefix { get; set; } = UpdateService.DefaultAccelPrefix;
+
     // ===== 诊断 =====
     public bool EnableDebugLog { get; set; } = false;
 
@@ -167,6 +177,13 @@ internal sealed class AppSettings
         if (!TryNormalizeTime(DarkStartTime, out var dt)) dt = TimeSpan.FromHours(19);
         LightStartTime = FormatTime(lt);
         DarkStartTime = FormatTime(dt);
+
+        // 加速前缀：null 归一化为默认值；用户显式清空（空串）要保留，表示直连
+        if (UpdateAccelPrefix is null) UpdateAccelPrefix = UpdateService.DefaultAccelPrefix;
+        UpdateAccelPrefix = UpdateAccelPrefix.Trim();
+        // 给了前缀却没带协议头，补 https 免得拼出相对地址
+        if (UpdateAccelPrefix.Length > 0 && !UpdateAccelPrefix.Contains("://"))
+            UpdateAccelPrefix = "https://" + UpdateAccelPrefix;
     }
 
     public static bool IsKnownTone(string? tone) => (tone ?? "").ToLowerInvariant() switch
