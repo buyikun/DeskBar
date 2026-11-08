@@ -911,6 +911,12 @@ public partial class SettingsWindow : Window
     /// <summary>最近一次检查解析出的原始（未加速）资产地址，用于预览改写结果。</summary>
     private string _realAssetUrl = "";
 
+    /// <summary>最近一次检查得到的最新版本号，下载后写入临时目录名。</summary>
+    private string _lastLatestVersion = "";
+
+    /// <summary>是否正在执行覆盖更新，防止重复点击。</summary>
+    private bool _installingUpdate;
+
     private async void OnCheckUpdate(object sender, RoutedEventArgs e)
     {
         if (_checkingUpdate) return;
@@ -937,7 +943,8 @@ public partial class SettingsWindow : Window
             TxtUpdateStatus.Style = (Style)FindResource("WarnHint");
             _lastAssetUrl = "";
             _lastReleasePageUrl = "";
-            BtnDownloadUpdate.IsEnabled = false;
+            _lastLatestVersion = "";
+            BranchUpdateButtons(enabled: false);
             BtnOpenReleasePage.IsEnabled = false;
             return;
         }
@@ -945,19 +952,20 @@ public partial class SettingsWindow : Window
         TxtUpdateStatus.Style = (Style)FindResource("Hint");
         _lastAssetUrl = r.AssetUrl;
         _lastReleasePageUrl = r.ReleasePageUrl;
+        _lastLatestVersion = r.LatestVersion;
 
         if (r.HasUpdate)
         {
             TxtUpdateStatus.Text = $"发现新版本 v{r.LatestVersion}（当前 v{r.CurrentVersion}）";
-            BtnDownloadUpdate.IsEnabled = r.AssetUrl.Length > 0;
-            BtnDownloadUpdate.Content = r.AssetName.Length > 0 ? "下载 " + r.AssetName : "下载更新";
+            BranchUpdateButtons(enabled: r.AssetUrl.Length > 0);
+            BtnDownloadUpdate.Content = "仅下载安装包";
             BtnOpenReleasePage.IsEnabled = r.ReleasePageUrl.Length > 0;
         }
         else
         {
             TxtUpdateStatus.Text = $"已是最新版本（v{r.CurrentVersion}）。";
-            BtnDownloadUpdate.IsEnabled = false;
-            BtnDownloadUpdate.Content = "下载更新";
+            BranchUpdateButtons(enabled: false);
+            BtnDownloadUpdate.Content = "仅下载安装包";
             BtnOpenReleasePage.IsEnabled = r.ReleasePageUrl.Length > 0;
         }
 
@@ -1018,6 +1026,112 @@ public partial class SettingsWindow : Window
         var url = _lastAssetUrl;
         if (url.Length == 0) return;
         await OpenUrlAsync(url);
+    }
+
+    /// <summary>
+    /// 覆盖式更新：下载 → 解压到临时目录 → 起外部脚本等本进程退出后替换文件 → 重启。
+    /// 用户确认后程序会自动关闭并重新打开，配置与日志不受影响。
+    /// </summary>
+    private async void OnInstallUpdate(object sender, RoutedEventArgs e)
+    {
+        if (_installingUpdate) return;
+        var url = _lastAssetUrl;
+        if (url.Length == 0) return;
+
+        var confirm = MessageBox.Show(
+            "将下载并安装新版本。\n\n安装过程中 DeskBar 会自动关闭，替换完成后重新启动。\n设置与日志不会丢失。",
+            "确认更新", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (confirm != MessageBoxResult.OK) return;
+
+        _installingUpdate = true;
+        SetUpdateBusy(true);
+        try
+        {
+            var result = await UpdateService.DownloadAsync(url, _lastLatestVersion, UpdateProgress);
+            if (result.Error.Length > 0)
+            {
+                ShowUpdateError(result.Error);
+                return;
+            }
+
+            var install = UpdateService.StartInstall(result.StagedDir, result.TempRoot);
+            if (install.Error.Length > 0)
+            {
+                ShowUpdateError(install.Error);
+                return;
+            }
+
+            TxtUpdateProgress.Text = "更新程序已启动，DeskBar 即将关闭并自动完成替换…";
+            TxtUpdateProgress.Visibility = Visibility.Visible;
+            Log.Info("update: apply script started, shutting down for replacement");
+
+            // 延迟 1.2 秒退出，让脚本有机会先观察到本进程存在，再等它消失
+            await Task.Delay(1200);
+            Close();
+            App.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"install update failed: {ex.Message}");
+            ShowUpdateError("安装失败：" + ex.Message);
+        }
+        finally
+        {
+            _installingUpdate = false;
+            SetUpdateBusy(false);
+        }
+    }
+
+    /// <summary>下载进度回调（可能来自后台线程，需切回 UI）。</summary>
+    private void UpdateProgress(string phase, int percent)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            TxtUpdateProgress.Text = phase;
+            TxtUpdateProgress.Visibility = Visibility.Visible;
+            BarUpdate.Visibility = Visibility.Visible;
+            if (percent >= 0)
+            {
+                BarUpdate.IsIndeterminate = false;
+                BarUpdate.Value = Math.Clamp(percent, 0, 100);
+            }
+            else
+            {
+                // 加速站不返回 Content-Length 时用不确定进度
+                BarUpdate.IsIndeterminate = true;
+            }
+        }));
+    }
+
+    private void SetUpdateBusy(bool busy)
+    {
+        BranchUpdateButtons(enabled: !busy && _lastAssetUrl.Length > 0);
+        BarUpdate.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        BarUpdate.Value = 0;
+        BarUpdate.IsIndeterminate = false;
+        if (!busy)
+        {
+            TxtUpdateProgress.Visibility = Visibility.Collapsed;
+            TxtUpdateProgress.Style = (Style)FindResource("Hint");
+        }
+    }
+
+    /// <summary>「立即更新」与「仅下载安装包」总有资产时一并可用/禁用。</summary>
+    private void BranchUpdateButtons(bool enabled)
+    {
+        BtnInstallUpdate.IsEnabled = enabled;
+        BtnDownloadUpdate.IsEnabled = enabled;
+    }
+
+    private void ShowUpdateError(string message)
+    {
+        TxtUpdateProgress.Text = message;
+        TxtUpdateProgress.Visibility = Visibility.Visible;
+        TxtUpdateProgress.Style = (Style)FindResource("WarnHint");
+        TxtUpdateStatus.Text = message;
+        TxtUpdateStatus.Style = (Style)FindResource("WarnHint");
+        BarUpdate.Visibility = Visibility.Collapsed;
+        Log.Warn("update: " + message);
     }
 
     private void OnOpenReleasePage(object sender, RoutedEventArgs e)

@@ -997,6 +997,39 @@
                         </StackPanel>
                     </Border>
 
+                    <TextBlock Text="更新说明" Style="{StaticResource GroupTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Border Background="{DynamicResource ControlBgBrush}"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    BorderThickness="1" CornerRadius="{DynamicResource RadiusControl}" Padding="10,8">
+                                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                    <TextBlock x:Name="TxtUpdateNotes" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource SubTextBrush}"
+                                               Text="检查更新后，这里会显示最新版本的发行说明。" />
+                                </ScrollViewer>
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button x:Name="BtnInstallUpdate" Style="{StaticResource AccentButton}"
+                                        Content="立即更新" MinWidth="120" IsEnabled="False"
+                                        Click="OnInstallUpdate" />
+                                <Button x:Name="BtnDownloadUpdate" Style="{StaticResource ModernButton}"
+                                        Content="仅下载安装包" MinWidth="120" Margin="8,0,0,0"
+                                        IsEnabled="False" Click="OnDownloadUpdate" />
+                                <Button x:Name="BtnOpenReleasePage" Style="{StaticResource ModernButton}"
+                                        Content="打开发布页" MinWidth="104" Margin="8,0,0,0"
+                                        IsEnabled="False" Click="OnOpenReleasePage" />
+                            </StackPanel>
+                            <ProgressBar x:Name="BarUpdate" Height="3" Margin="0,12,0,0"
+                                         Minimum="0" Maximum="100" Value="0"
+                                         Foreground="{DynamicResource AccentBrush}"
+                                         Background="{DynamicResource ControlBgBrush}"
+                                         BorderThickness="0" Visibility="Collapsed" />
+                            <TextBlock x:Name="TxtUpdateProgress" Style="{StaticResource Hint}"
+                                       Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+                        </StackPanel>
+                    </Border>
+
                     <TextBlock Text="下载加速" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
@@ -1013,29 +1046,6 @@
                             <TextBlock x:Name="TxtAccelPreview" Style="{StaticResource Hint}"
                                        Margin="0,12,0,0" TextWrapping="Wrap"
                                        Text="示例：https://github.com/buyikun/DeskBar/releases/download/v2.0.0/..." />
-                        </StackPanel>
-                    </Border>
-
-                    <TextBlock Text="更新说明" Style="{StaticResource GroupTitle}" />
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <Border Background="{DynamicResource ControlBgBrush}"
-                                    BorderBrush="{DynamicResource ControlBorderBrush}"
-                                    BorderThickness="1" CornerRadius="{DynamicResource RadiusControl}" Padding="10,8">
-                                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
-                                    <TextBlock x:Name="TxtUpdateNotes" FontSize="11" TextWrapping="Wrap"
-                                               Foreground="{DynamicResource SubTextBrush}"
-                                               Text="检查更新后，这里会显示最新版本的发行说明。" />
-                                </ScrollViewer>
-                            </Border>
-                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button x:Name="BtnDownloadUpdate" Style="{StaticResource ModernButton}"
-                                        Content="下载更新" MinWidth="112" IsEnabled="False"
-                                        Click="OnDownloadUpdate" />
-                                <Button x:Name="BtnOpenReleasePage" Style="{StaticResource ModernButton}"
-                                        Content="打开发布页" MinWidth="104" Margin="8,0,0,0"
-                                        IsEnabled="False" Click="OnOpenReleasePage" />
-                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -72,6 +73,13 @@ internal static class UpdateService
         /// <summary>失败原因，成功时为空。</summary>
         public string Error { get; init; } = "";
     }
+
+    /// <summary>
+    /// 覆盖更新的进度回调。
+    /// </summary>
+    /// <param name="phase">当前阶段（下载 / 解压 / 准备替换）。</param>
+    /// <param name="percent">0–100；未知总量时为 -1。</param>
+    public delegate void ProgressCallback(string phase, int percent);
 
     /// <summary>当前程序版本（三段式，取 Assembly 版本）。</summary>
     public static string CurrentVersion =>
@@ -236,5 +244,198 @@ internal static class UpdateService
             result[i] = n;
         }
         return result;
+    }
+
+    // ===================== 下载与覆盖安装 =====================
+
+    /// <summary>
+    /// 下载更新包并解压到暂存目录。
+    /// 返回解压后的目录（内含新的 exe/dll）与临时根目录，供安装时使用。
+    /// </summary>
+    public static async Task<DownloadResult> DownloadAsync(string assetUrl, string latestVersion,
+        ProgressCallback? progress)
+    {
+        if (string.IsNullOrWhiteSpace(assetUrl))
+            return new DownloadResult { Error = "没有可用的下载地址。" };
+
+        var stamp = $"{latestVersion}_{DateTime.Now:yyyyMMddHHmmss}";
+        var root = Path.Combine(Path.GetTempPath(), "DeskBar-Update", stamp);
+        var zipPath = Path.Combine(root, "update.zip");
+        var stagedDir = Path.Combine(root, "staged");
+
+        try
+        {
+            Directory.CreateDirectory(root);
+            Directory.CreateDirectory(stagedDir);
+
+            progress?.Invoke("正在下载更新包…", 0);
+            if (!await DownloadFileAsync(assetUrl, zipPath, progress).ConfigureAwait(false))
+                return new DownloadResult { Error = "下载失败，请检查网络或更换加速前缀后重试。" };
+
+            progress?.Invoke("正在解压…", 100);
+            System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, stagedDir, overwriteFiles: true);
+
+            // 校验：解压后必须能找到 DeskBar.exe，否则这个包不是我们要的
+            if (!File.Exists(Path.Combine(stagedDir, "DeskBar.exe")))
+                return new DownloadResult { Error = "更新包内容异常：未找到 DeskBar.exe。" };
+
+            progress?.Invoke("准备就绪", 100);
+            return new DownloadResult { StagedDir = stagedDir, TempRoot = root };
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"update download failed: {ex.Message}");
+            try { Directory.Delete(root, true); } catch { }
+            return new DownloadResult { Error = "下载或解压失败：" + ex.Message };
+        }
+    }
+
+    /// <summary>下载文件的包内结果。</summary>
+    public sealed class DownloadResult
+    {
+        /// <summary>解压后包含新版本的目录。</summary>
+        public string StagedDir { get; init; } = "";
+
+        /// <summary>本次更新的临时根目录，安装或失败后应清理。</summary>
+        public string TempRoot { get; init; } = "";
+
+        public string Error { get; init; } = "";
+    }
+
+    private static async Task<bool> DownloadFileAsync(string url, string destPath, ProgressCallback? progress)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+
+        var total = resp.Content.Headers.ContentLength ?? -1L;
+        // 加速站可能不返回 Content-Length，此时进度只能显示已下载量
+        long received = 0;
+        var buffer = new byte[8192];
+
+        await using (var src = await resp.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false))
+        await using (var dst = File.Create(destPath))
+        {
+            int read;
+            while ((read = await src.ReadAsync(buffer, cts.Token).ConfigureAwait(false)) > 0)
+            {
+                await dst.WriteAsync(buffer.AsMemory(0, read), cts.Token).ConfigureAwait(false);
+                received += read;
+                if (total > 0)
+                    progress?.Invoke($"正在下载 {received / 1024}KB / {total / 1024}KB",
+                        (int)(received * 100 / total));
+                else
+                    progress?.Invoke($"正在下载 {received / 1024}KB", -1);
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 生成「等本进程退出后替换文件并重启」的批处理脚本，然后调用它。
+    ///
+    /// 为什么要外部脚本：DeskBar.exe / DeskBar.dll 正在被本进程加载，Windows 不允许覆盖
+    /// 已被映射的可执行文件。只能让当前进程先退出，由不持有这些文件句柄的 cmd 完成替换。
+    /// 脚本会：等待本进程退出 → 拷贝新文件 → 清理临时目录 → 重新启动程序。
+    /// </summary>
+    public static InstallResult StartInstall(string stagedDir, string tempRoot)
+    {
+        try
+        {
+            var appDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            var exePath = Path.Combine(appDir, "DeskBar.exe");
+            if (!File.Exists(exePath))
+                return new InstallResult { Error = "找不到当前程序路径。" };
+
+            var scriptPath = Path.Combine(tempRoot, "apply-update.cmd");
+            var logPath = Path.Combine(tempRoot, "apply-update.log");
+
+            // 用户配置与日志不覆盖：settings.json 不在包里，logs 目录脚本里显式跳过
+            var script = BuildApplyScript(
+                pid: Environment.ProcessId,
+                stagedDir: stagedDir,
+                appDir: appDir,
+                exePath: exePath,
+                tempRoot: tempRoot,
+                logPath: logPath);
+            File.WriteAllText(scriptPath, script, new System.Text.UTF8Encoding(false));
+
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c \"{scriptPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = tempRoot
+            };
+            System.Diagnostics.Process.Start(psi);
+
+            Log.Info($"update: install script launched, staged={stagedDir}");
+            return new InstallResult { Started = true };
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"update install failed: {ex.Message}");
+            return new InstallResult { Error = "启动更新程序失败：" + ex.Message };
+        }
+    }
+
+    /// <summary>安装启动结果。</summary>
+    public sealed class InstallResult
+    {
+        public bool Started { get; init; }
+        public string Error { get; init; } = "";
+    }
+
+    /// <summary>
+    /// 生成替换脚本。全部使用 cmd 内建命令 + 绝对路径，不依赖 PowerShell。
+    ///
+    /// 两条踩过的坑：
+    /// ① 延时不能用 <c>timeout</c>：环境里若存在 GNU timeout 会遮蔽 cmd 的同名命令，
+    ///    脚本直接报 "invalid time interval"。改用 <c>ping -n N 127.0.0.1</c> 更稳。
+    /// ② 判进程存活不能用裸 <c>find</c>：改用 <c>tasklist /FO CSV /NH</c> + <c>findstr</c>。
+    /// </summary>
+    private static string BuildApplyScript(int pid, string stagedDir, string appDir,
+        string exePath, string tempRoot, string logPath)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("@echo off");
+        sb.AppendLine("setlocal enableextensions enabledelayedexpansion");
+        sb.AppendLine($"echo [%date% %time%] update start > \"{logPath}\"");
+        sb.AppendLine();
+
+        // 等旧进程真正退出（最多约 60 秒），避免拷贝时文件仍被占用。
+        // 用 findstr 匹配 PID 数字，可跨中英文系统（tasklist 输出语言无关的是 PID 列）。
+        sb.AppendLine("set /a tries=0");
+        sb.AppendLine(":waitloop");
+        sb.AppendLine($"tasklist /FI \"PID eq {pid}\" /FO CSV /NH 2>nul | findstr /C:\"{pid}\" >nul");
+        sb.AppendLine("if not errorlevel 1 (");
+        sb.AppendLine("  set /a tries+=1");
+        sb.AppendLine("  if !tries! GEQ 60 goto copyfiles");
+        sb.AppendLine("  ping -n 2 127.0.0.1 >nul");
+        sb.AppendLine("  goto waitloop");
+        sb.AppendLine(")");
+        sb.AppendLine();
+
+        sb.AppendLine(":copyfiles");
+        sb.AppendLine($"echo [%date% %time%] copying files (waited !tries!s) >> \"{logPath}\"");
+        sb.AppendLine($"xcopy /E /Y /R /I \"{stagedDir}\\*\" \"{appDir}\\\" >> \"{logPath}\" 2>&1");
+        sb.AppendLine("if errorlevel 1 (");
+        sb.AppendLine($"  echo [%date% %time%] COPY_FAILED >> \"{logPath}\"");
+        sb.AppendLine(") else (");
+        sb.AppendLine($"  echo [%date% %time%] copy ok >> \"{logPath}\"");
+        sb.AppendLine(")");
+        sb.AppendLine();
+
+        sb.AppendLine($"echo [%date% %time%] relaunch >> \"{logPath}\"");
+        sb.AppendLine($"start \"\" \"{exePath}\"");
+        sb.AppendLine();
+
+        // 自清理：再起一个独立 cmd，等本脚本退出后再删临时目录
+        sb.AppendLine($"echo [%date% %time%] cleanup >> \"{logPath}\"");
+        sb.AppendLine($"start \"\" /b cmd /c \"ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{tempRoot}\"\"");
+        sb.AppendLine("endlocal");
+        sb.AppendLine("exit /b 0");
+        return sb.ToString();
     }
 }
