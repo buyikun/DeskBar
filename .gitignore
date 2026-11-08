@@ -39,3 +39,9 @@ test_zip_extract/
 
 # Cross-session sync baseline (sync-frontend.ps1)
 .sync/
+
+# Release artifacts & ad-hoc screenshots (never commit)
+/DeskBar-v*-win-x64.zip
+/shot*.png
+/_release_body.json
+
