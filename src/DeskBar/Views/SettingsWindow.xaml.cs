@@ -908,6 +908,9 @@ public partial class SettingsWindow : Window
 
     private string _lastReleasePageUrl = "";
 
+    /// <summary>最近一次检查解析出的原始（未加速）资产地址，用于预览改写结果。</summary>
+    private string _realAssetUrl = "";
+
     private async void OnCheckUpdate(object sender, RoutedEventArgs e)
     {
         if (_checkingUpdate) return;
@@ -959,6 +962,11 @@ public partial class SettingsWindow : Window
         }
 
         TxtUpdateNotes.Text = r.Notes.Length > 0 ? r.Notes : "该版本没有提供发行说明。";
+
+        // 检查到真实资产后，预览改用真实地址，别再显示静态样例
+        if (r.AssetUrl.Length > 0) _realAssetUrl = r.AssetUrl;
+        UpdateAccelPreview();
+
         Log.Info($"update check: latest={r.LatestVersion} current={r.CurrentVersion} hasUpdate={r.HasUpdate}");
     }
 
@@ -980,8 +988,10 @@ public partial class SettingsWindow : Window
     /// <summary>把当前前缀与一个示例 GitHub 地址拼出来，让用户直接看到改写效果。</summary>
     private void UpdateAccelPreview()
     {
-        // 用当前版本拼一个真实形状的下载地址作样例
-        var sample = $"https://github.com/buyikun/DeskBar/releases/download/v{UpdateService.CurrentVersion}/DeskBar-v{UpdateService.CurrentVersion}-win-x64.zip";
+        // 优先用检查更新拿到的真实资产地址；还没检查过时用当前版本拼一个形状相同的样例
+        var sample = _realAssetUrl.Length > 0
+            ? _realAssetUrl
+            : $"https://github.com/buyikun/DeskBar/releases/download/v{UpdateService.CurrentVersion}/DeskBar-v{UpdateService.CurrentVersion}-win-x64.zip";
         var prefix = TxtAccelPrefix.Text.Trim();
         if (prefix.Length == 0)
         {
