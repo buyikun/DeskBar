@@ -118,6 +118,26 @@ internal static class NativeMethods
 
     public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
 
+    [DllImport(User32)]
+    public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    public const uint MONITOR_DEFAULTTONULL = 0;
+    public const uint MONITOR_DEFAULTTOPRIMARY = 1;
+    public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    [DllImport(User32, SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
     /// <summary>
     /// 优先用 DWM 扩展边框，失败时回退 GetWindowRect。
     /// 结果为空矩形（right&lt;=left 或 bottom&lt;=top）时同样回退。

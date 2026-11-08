@@ -8,7 +8,7 @@
         AllowsTransparency="False"
         Background="Transparent"
         ShowInTaskbar="False"
-        Topmost="True"
+        Topmost="False"
         ResizeMode="NoResize"
         Width="340"
         Height="420"

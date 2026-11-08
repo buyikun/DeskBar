@@ -264,7 +264,9 @@ internal static class TaskbarService
         _lastRegionSig = "";
     }
 
-    private static bool IsFullscreenForeground()
+    private static bool _lastFullscreenState;
+
+    public static bool IsFullscreenForeground()
     {
         try
         {
@@ -279,6 +281,17 @@ internal static class TaskbarService
             var cls = sb.ToString();
             if (cls is "Progman" or "WorkerW" or "XamlWindow" or "Windows.UI.Core.CoreWindow" or "Shell_SecondaryTrayWnd" or "Shell_TrayWnd")
                 return false;
+            
+            // 英雄联盟无边框全屏模式
+            if (cls == "RiotWindowClass")
+            {
+                if (!_lastFullscreenState)
+                {
+                    _lastFullscreenState = true;
+                    Log.Info("Fullscreen detected: [RiotWindowClass] League of Legends client");
+                }
+                return true;
+            }
 
             NativeMethods.GetWindowThreadProcessId(fg, out var pid);
             if (pid != 0)
@@ -294,18 +307,47 @@ internal static class TaskbarService
                 catch { }
             }
 
-            if (NativeMethods.GetWindowRect(fg, out var rc))
+            if (NativeMethods.TryGetWindowBounds(fg, out var rc))
             {
+                var hMonitor = NativeMethods.MonitorFromWindow(fg, NativeMethods.MONITOR_DEFAULTTONEAREST);
+                if (hMonitor != IntPtr.Zero)
+                {
+                    var mi = new NativeMethods.MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+                    if (NativeMethods.GetMonitorInfoW(hMonitor, ref mi))
+                    {
+                        if (rc.left <= mi.rcMonitor.left && rc.top <= mi.rcMonitor.top && 
+                            rc.right >= mi.rcMonitor.right && rc.bottom >= mi.rcMonitor.bottom)
+                        {
+                            if (!_lastFullscreenState)
+                            {
+                                _lastFullscreenState = true;
+                                Log.Info($"Fullscreen detected: [{cls}], rc=[{rc.left},{rc.top},{rc.right},{rc.bottom}] vs monitor=[{mi.rcMonitor.left},{mi.rcMonitor.top},{mi.rcMonitor.right},{mi.rcMonitor.bottom}]");
+                            }
+                            return true;
+                        }
+                    }
+                }
+
                 int screenW = NativeMethods.GetSystemMetrics(0); // SM_CXSCREEN
                 int screenH = NativeMethods.GetSystemMetrics(1); // SM_CYSCREEN
                 if (rc.left <= 0 && rc.top <= 0 && rc.right >= screenW && rc.bottom >= screenH)
                 {
-                    Log.Info($"Fullscreen detected: [{cls}] '{sb}', rc=[{rc.left},{rc.top},{rc.right},{rc.bottom}] vs screen=[{screenW},{screenH}]");
+                    if (!_lastFullscreenState)
+                    {
+                        _lastFullscreenState = true;
+                        Log.Info($"Fullscreen detected (fallback): [{cls}], rc=[{rc.left},{rc.top},{rc.right},{rc.bottom}] vs screen=[{screenW},{screenH}]");
+                    }
                     return true;
                 }
             }
         }
         catch { }
+
+        if (_lastFullscreenState)
+        {
+            _lastFullscreenState = false;
+            Log.Info("Fullscreen exited");
+        }
         return false;
     }
 
@@ -829,11 +871,13 @@ internal static class TaskbarService
     /// <summary>当前是否处于浮岛（裁剪任务栏）模式。</summary>
     public static bool IsIslandActive => _islandActive;
 
-    /// <summary>任务栏此刻是否正常显示在屏幕上（被自动隐藏推出屏幕时为 false）。</summary>
+    /// <summary>任务栏此刻是否正常显示在屏幕上（被自动隐藏推出屏幕或被全屏窗口遮蔽时为 false）。</summary>
     public static bool IsTaskbarOnScreen()
     {
         try
         {
+            if (IsFullscreenForeground()) return false;
+
             var tray = NativeMethods.FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return false;
             if (!NativeMethods.IsWindowVisible(tray)) return false;

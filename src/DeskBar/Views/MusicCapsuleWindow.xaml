@@ -8,7 +8,7 @@
         ShowInTaskbar="False"
         ShowActivated="False"
         Focusable="False"
-        Topmost="True"
+        Topmost="False"
         ResizeMode="NoResize"
         SizeToContent="Manual"
         Width="250"

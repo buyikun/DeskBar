@@ -890,6 +890,8 @@ public partial class MusicCapsuleWindow : Window
     {
         try
         {
+            if (!TaskbarService.IsTaskbarOnScreen()) return true;
+
             var tray = NativeMethods.FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return true;
             if (!NativeMethods.IsWindowVisible(tray)) return true;

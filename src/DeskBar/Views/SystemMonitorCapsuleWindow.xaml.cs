@@ -352,6 +352,8 @@ public partial class SystemMonitorCapsuleWindow : Window
 
     private static bool IsTaskbarUnavailable()
     {
+        if (!TaskbarService.IsTaskbarOnScreen()) return true;
+
         var tray = NativeMethods.FindWindowW("Shell_TrayWnd", null);
         if (tray == IntPtr.Zero || !NativeMethods.IsWindowVisible(tray)) return true;
 

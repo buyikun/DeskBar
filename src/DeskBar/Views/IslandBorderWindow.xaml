@@ -8,7 +8,7 @@
         ShowInTaskbar="False"
         ShowActivated="False"
         ResizeMode="NoResize"
-        Topmost="True"
+        Topmost="False"
         Focusable="False"
         Width="220" Height="48">
     <!-- 单一细线，与音乐胶囊 / 系统信息浮岛用同一个颜色与圆角。

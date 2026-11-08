@@ -240,7 +240,20 @@ internal static class AcrylicWindowHelper
     {
         try
         {
-            if (!window.IsVisible) return;
+            if (TaskbarService.IsFullscreenForeground())
+            {
+                if (window.Visibility != Visibility.Collapsed)
+                    window.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            if (!window.IsVisible)
+            {
+                if (window.Visibility == Visibility.Collapsed)
+                    window.Visibility = Visibility.Visible;
+                return;
+            }
+
             var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
 
