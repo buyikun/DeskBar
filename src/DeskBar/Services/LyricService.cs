@@ -683,7 +683,13 @@ internal static class LyricService
             {
                 Title = title,
                 Artist = artist ?? "",
-                Lines = lines
+                Lines = lines,
+                // QQ 分支原本只读本地 QRC，CoverBytes 恒为 null，导致
+                // MediaSessionService 的网络封面补全分支（依赖 CoverBytes）永远进不去。
+                // 这里挂上播放器自己的封面缓存。
+                // 注意：QRC 匹配拿不到专辑名，只能退回「歌手+标题」判据；
+                // 主路径（MediaSessionService）已传入 album 走精确匹配，这个是次选兜底。
+                CoverBytes = TryGetLocalCover(title, artist ?? "")
             };
         }
         catch (Exception ex)
@@ -691,6 +697,135 @@ internal static class LyricService
             Log.Debug($"lyrics '{title}': QQ QRC lookup failed: {ex.GetType().Name}: {ex.Message}");
         }
         return null;
+    }
+
+    /// <summary>
+    /// 读取播放器自己缓存的本地封面（目前覆盖 QQ 音乐）。
+    ///
+    /// 背景：QQ 音乐把封面按「歌手_专辑_编号.jpg」存进 QQMusicPicture（
+    /// <see cref="MediaCacheLocator"/> 早已把该目录列入扫描目标），但此前只拿它找 .qrc，
+    /// 图片从未被使用。当 SMTC 缩略图不可读时，这是最干净的兜底：读已有缓存，
+    /// 不新建磁盘目录、不发网络请求，符合「封面禁止自建磁盘缓存」的约束。
+    ///
+    /// 判据沿用 WaterSprite `cache-media.cjs:14,40` 的做法：文件名是「歌手_专辑」，
+    /// 拼 <c>归一化(歌手)+归一化(专辑)</c> 做全等匹配，且必须唯一。
+    /// 之前用「标题 contains」是错的——只有专辑名恰好等于歌名时才碰巧命中
+    /// （如《寂寞沙洲冷》），而《幻听》的专辑是「梦游计」，用歌名永远匹配不到。
+    /// 专辑缺失时才退回标题匹配，宁可没封面也不配错版本。
+    /// </summary>
+    internal static byte[]? TryGetLocalCover(string title, string artist, string album = "")
+    {
+        if (string.IsNullOrWhiteSpace(title)) return null;
+
+        string cacheKey = $"cover|{artist}|{album}|{title}";
+        var hit = _coverCache.TryGetValue(cacheKey, out var existing) ? existing : null;
+        if (hit != null)
+        {
+            // 空结果也缓存（对应 WaterSprite `kuwo-artwork.cjs:24` 的失败短缓存），
+            // 否则「这首歌没有封面」会随每次刷新重扫目录。
+            long now = Environment.TickCount64;
+            if (now - hit.At < (hit.Bytes != null ? CoverHitTtlMs : CoverMissTtlMs))
+                return hit.Bytes;
+        }
+
+        var bytes = TryReadLocalCoverFile(title, artist, album);
+        _coverCache[cacheKey] = new CoverCacheEntry(Environment.TickCount64, bytes);
+
+        // 容量上限，防止长会话线性增长（对应 `kuwo-artwork.cjs:38` 的 memo.size>128 淘汰）
+        if (_coverCache.Count > CoverCacheLimit)
+        {
+            foreach (var stale in _coverCache.Keys.Take(_coverCache.Count - CoverCacheLimit))
+                _coverCache.TryRemove(stale, out _);
+        }
+
+        return bytes;
+    }
+
+    /// <summary>封面缓存的失败结果只记一小段时间，避免长会话内存膨胀但又不必每轮重扫。</summary>
+    private const long CoverHitTtlMs = 30 * 60 * 1000;
+    private const long CoverMissTtlMs = 5 * 60 * 1000;
+    private const int CoverCacheLimit = 64;
+
+    private sealed record CoverCacheEntry(long At, byte[]? Bytes);
+
+    private static readonly ConcurrentDictionary<string, CoverCacheEntry> _coverCache = new();
+
+    /// <summary>QQ 音乐封面文件名的「歌手_专辑_编号.扩展名」结构，编号是分辨率档位。</summary>
+    private static readonly Regex CoverSuffixRegex = new(@"_(\d+)\.(jpg|png|webp)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>播放器自带的占位图，不是真实封面（对应 `cache-media.cjs:14` 的 Albumdefault 排除）。</summary>
+    private static readonly Regex CoverPlaceholderRegex = new(@"^(Albumdefault|HQ|SQ)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static byte[]? TryReadLocalCoverFile(string title, string artist, string album)
+    {
+        try
+        {
+            string[] artists = SplitArtists(artist ?? "");
+            string targetTitle = NormalizeForMatch(title);
+            string targetAlbum = NormalizeForMatch(album ?? "");
+
+            // 主判据：歌手+专辑全等；专辑没上报时退回标题包含匹配
+            bool useAlbum = targetAlbum.Length > 0;
+            string targetKey = useAlbum ? NormalizeForMatch(artist ?? "") + targetAlbum : "";
+
+            // 收集全部候选。目录只有几十项，重扫开销由外层 _coverCache 的
+            // 成功/失败双档 TTL 兜住，命中缓存时根本不会走到这里。
+            var matches = new List<(int Rank, string File)>();
+            foreach (var dir in MediaCacheLocator.FindLyricDirs(MediaSourceKind.QQMusic))
+            {
+                if (!Directory.Exists(dir)) continue;
+
+                string[] files;
+                try { files = Directory.GetFiles(dir, "*.jpg"); }
+                catch { continue; }
+
+                foreach (var file in files)
+                {
+                    string fileName = Path.GetFileName(file);
+                    string stem = Path.GetFileNameWithoutExtension(file);
+
+                    var suffix = CoverSuffixRegex.Match(fileName);
+                    string baseName = suffix.Success ? fileName.Substring(0, suffix.Index) : stem;
+                    if (CoverPlaceholderRegex.IsMatch(baseName)) continue;
+
+                    string normalizedBase = NormalizeForMatch(baseName);
+                    if (normalizedBase.Length == 0) continue;
+
+                    if (useAlbum)
+                    {
+                        // 「歌手_专辑」拼起来全等，多歌手用 _ 连接时也成立
+                        if (normalizedBase != targetKey) continue;
+                    }
+                    else
+                    {
+                        if (!normalizedBase.Contains(targetTitle)) continue;
+                        if (artists.Length > 0 && !artists.All(a => normalizedBase.Contains(a))) continue;
+                    }
+
+                    int rank = suffix.Success ? int.Parse(suffix.Groups[1].Value) : -1;
+                    matches.Add((rank, file));
+                }
+            }
+
+            if (matches.Count == 0) return null;
+
+            // 同一专辑可能有多个分辨率档位（实测 _4=500x500、_0=150x150），
+            // 取档位最大（最清晰）的那张，而不是像参考实现那样遇到多候选就放弃。
+            matches.Sort((a, b) => b.Rank.CompareTo(a.Rank));
+            string picked = matches[0].File;
+
+            byte[] bytes = File.ReadAllBytes(picked);
+            if (bytes.Length == 0 || bytes.Length > 1024 * 1024) return null;
+            if (!SafeArtwork.TryDetectImageMime(bytes, out _)) return null;
+
+            Log.Debug($"cover '{title}': local QQMusicPicture hit, file={Path.GetFileName(picked)}");
+            return bytes;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"cover '{title}': local picture lookup failed: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>

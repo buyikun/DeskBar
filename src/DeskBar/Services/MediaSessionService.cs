@@ -47,6 +47,20 @@ internal sealed class MediaSessionService : IDisposable
     private TrackLyrics? _currentTrackLyrics;
     private double _currentLyricProgress;
 
+    /// <summary>
+    /// 已经确认 GSMTC 缩略图流读不出来的曲目。QQ 音乐会上报 Thumbnail != null，
+    /// 但流内容为空/不可读，每轮轮询都会重复解码失败。记录曲目键后同曲不再重试，
+    /// 改走本地封面缓存，避免每 3 秒空转 3 次解码 + 300ms 延时。
+    /// </summary>
+    private string? _thumbnailBrokenFor;
+
+    /// <summary>
+    /// 本地封面缓存（曲目级）。读盘在 UI 线程上执行，而刷新是 3 秒一轮，
+    /// 不缓存就等于常态周期性读盘，违反零磁盘写入预算。已 Freeze 可跨轮复用。
+    /// </summary>
+    private string? _localCoverKey;
+    private ImageSource? _localCoverImage;
+
     public event Action<MediaTrackInfo?>? MediaInfoChanged;
     public event Action<string?>? LyricUpdated;
     /// <summary>当前这句歌词的演唱进度 0..1，用来驱动胶囊里的横向滚动。</summary>
@@ -600,42 +614,51 @@ internal sealed class MediaSessionService : IDisposable
 
             ImageSource? thumbnailImage = null;
             bool isRealThumbnail = false;
+            // 专辑参与缓存键：QQ 音乐封面是按「歌手_专辑」命名的，同歌名不同专辑
+            // 必须区分开，否则会拿错封面（参考 WaterSprite `cache-media.cjs:40`）。
+            string albumTitle = props.AlbumTitle ?? "";
+            string thumbKey = $"{appId}|{title}|{artist}|{albumTitle}";
 
-            // 1. 如果 GSMTC 声明有封面，尽力多次重试解码本地流
-            if (props.Thumbnail != null)
+            // 1. 如果 GSMTC 声明有封面，尽力解码。同一首曲目已知失败就不再重试。
+            if (props.Thumbnail != null && _thumbnailBrokenFor != thumbKey)
             {
-                for (int attempt = 0; attempt < 3; attempt++)
+                bool decoded = false;
+                for (int attempt = 0; attempt < 2 && !decoded; attempt++)
                 {
                     try
                     {
                         using var streamRef = await props.Thumbnail.OpenReadAsync();
                         if (streamRef != null && streamRef.Size > 0)
                         {
+                            // LoadAsync 可能返回少于请求的字节数（Windows 侧按块投递）。
+                            // 之前直接用 streamRef.Size 建数组并按它赋值，流短于声明长度时
+                            // 必然抛「无法从流中读取」。这里循环补读，以实际读到的为准。
+                            uint want = (uint)streamRef.Size;
                             using var reader = new DataReader(streamRef.GetInputStreamAt(0));
-                            await reader.LoadAsync((uint)streamRef.Size);
-                            byte[] bytes = new byte[streamRef.Size];
-                            reader.ReadBytes(bytes);
-
-                            if (bytes.Length > 0)
+                            uint loaded = await reader.LoadAsync(want);
+                            if (loaded > 0)
                             {
-                                var ms = new MemoryStream(bytes);
-                                var bitmap = new BitmapImage();
-                                bitmap.BeginInit();
-                                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                                bitmap.StreamSource = ms;
-                                bitmap.EndInit();
-                                bitmap.Freeze();
-                                thumbnailImage = bitmap;
-                                isRealThumbnail = true;
-                                break;
+                                byte[] bytes = new byte[loaded];
+                                reader.ReadBytes(bytes);
+
+                                if (bytes.Length > 0)
+                                {
+                                    var bitmap = LoadBitmapFromBytes(bytes);
+                                    if (bitmap != null)
+                                    {
+                                        thumbnailImage = bitmap;
+                                        isRealThumbnail = true;
+                                    }
+                                    decoded = true;
+                                }
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        if (attempt < 2)
+                        if (attempt == 0)
                         {
-                            await Task.Delay(100 * (attempt + 1));
+                            await Task.Delay(80);
                         }
                         else
                         {
@@ -643,9 +666,33 @@ internal sealed class MediaSessionService : IDisposable
                         }
                     }
                 }
+
+                // 记下这首歌的缩略图不可用，本轮及后续轮询不再重复解码。
+                if (!isRealThumbnail) _thumbnailBrokenFor = thumbKey;
             }
 
-            // 2. 异步检索/加载歌词与网络高质量封面补全
+            // 2. GSMTC 没有可用封面时，先读播放器自己的本地封面缓存
+            //    （QQ 音乐 QQMusicPicture）。纯本地文件读取：不发网络请求、不写盘。
+            //    结果按曲目缓存，避免 3 秒一轮重复读盘。
+            if (!isRealThumbnail)
+            {
+                if (_localCoverKey != thumbKey)
+                {
+                    _localCoverImage = null;
+                    var localCover = LyricService.TryGetLocalCover(title, artist, albumTitle);
+                    if (localCover != null && localCover.Length > 0)
+                        _localCoverImage = LoadBitmapFromBytes(localCover);
+                    _localCoverKey = thumbKey;
+                }
+
+                if (_localCoverImage != null)
+                {
+                    thumbnailImage = _localCoverImage;
+                    isRealThumbnail = true;
+                }
+            }
+
+            // 3. 异步检索/加载歌词与网络高质量封面补全
             if (!string.IsNullOrWhiteSpace(title) && title != "未知曲目")
             {
                 // 按音源分流：QQ 音乐只读 QQ 缓存、网易云只走网易云接口，
@@ -659,7 +706,8 @@ internal sealed class MediaSessionService : IDisposable
                         _currentTrackLyrics = lyrics;
                         CheckLyricProgress();
 
-                        // 如果之前 SMTC 没有封面，而歌词服务拿到了高清封面图
+                        // 如果之前 SMTC 和本地缓存都没有封面，而歌词服务拿到了高清封面图
+                        // 本地封面命中时不再发起网络补全，省掉一次接口往返。
                         if (!isRealThumbnail && lyrics?.CoverBytes != null && lyrics.CoverBytes.Length > 0)
                         {
                             var netBitmap = LoadBitmapFromBytes(lyrics.CoverBytes);
@@ -691,7 +739,7 @@ internal sealed class MediaSessionService : IDisposable
                 });
             }
 
-            // 3. 终极兜底：播放器 app icon
+            // 4. 终极兜底：播放器 app icon
             thumbnailImage ??= AppIconHelper.GetIcon(appId);
 
             var trackId = $"{appId}|{title}|{artist}|{isPlaying}|{isRealThumbnail}";
@@ -730,7 +778,27 @@ internal sealed class MediaSessionService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 解码图片字节。WPF 的 BitmapImage 对带 EXIF(APP1) 段的 JPEG 会直接抛
+    /// 「无法从流中读取」——QQ 音乐的封面缓存里就有这种 144DPI+EXIF 变体
+    /// （实测 78 张里 3 张解不出，GSMTC 同一报错也源于此）。
+    /// 因此直读失败时剥掉 APP1 段再试一次；仍失败才放弃。
+    /// </summary>
     private static BitmapImage? LoadBitmapFromBytes(byte[] bytes)
+    {
+        var direct = TryDecodeImage(bytes);
+        if (direct != null) return direct;
+
+        var stripped = StripApp1Segment(bytes);
+        if (stripped.Length != bytes.Length)
+        {
+            var retry = TryDecodeImage(stripped);
+            if (retry != null) return retry;
+        }
+        return null;
+    }
+
+    private static BitmapImage? TryDecodeImage(byte[] bytes)
     {
         try
         {
@@ -744,6 +812,54 @@ internal sealed class MediaSessionService : IDisposable
             return bitmap;
         }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// 剥掉 JPEG 的 APP1（EXIF）段。只处理 JPEG 的段结构，非 JPEG 原样返回。
+    /// 退出码：遇到 SOS(0xDA) 后一律原样拷贝剩余熵编码数据，不再解析。
+    /// </summary>
+    private static byte[] StripApp1Segment(byte[] bytes)
+    {
+        // JPEG 必须从 SOI(FFD8) 开始
+        if (bytes.Length < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8) return bytes;
+
+        var output = new List<byte>(bytes.Length);
+        output.Add((byte)0xFF);
+        output.Add((byte)0xD8);
+
+        int i = 2;
+        while (i < bytes.Length - 1)
+        {
+            if (bytes[i] != 0xFF) break;
+            byte marker = bytes[i + 1];
+            if (marker == 0xD9) break;          // EOI
+            if (marker == 0xD8) { i += 2; continue; }
+            if (i + 3 >= bytes.Length) break;
+
+            int segLength = (bytes[i + 2] << 8) | bytes[i + 3];
+
+            // SOS 之后是熵编码数据，原样拷贝到结尾
+            if (marker == 0xDA)
+            {
+                for (int k = i; k < bytes.Length; k++) output.Add(bytes[k]);
+                return output.ToArray();
+            }
+
+            // APP1 = EXIF/XMP，整段丢弃
+            if (marker == 0xE1)
+            {
+                i += 2 + segLength;
+                continue;
+            }
+
+            int end = Math.Min(i + 2 + segLength, bytes.Length);
+            for (int k = i; k < end; k++) output.Add(bytes[k]);
+            i += 2 + segLength;
+        }
+
+        output.Add((byte)0xFF);
+        output.Add((byte)0xD9);
+        return output.ToArray();
     }
 
     public async Task<bool> TogglePlayPauseAsync()

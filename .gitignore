@@ -126,3 +126,6 @@ test_zip_extract/
 !/.agents/skills/
 /.agents/skills/*
 !/.agents/skills/sync-frontend/
+
+# .scratch：借鉴调研时 clone 的参考实现 + 一次性探测脚本/截图（不入库）
+/.scratch/
