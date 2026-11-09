@@ -39,6 +39,18 @@ internal sealed class AppSettings
     public bool AutoTimeApplySystemTheme { get; set; } = true;
 
     /// <summary>
+    /// 联动系统主题时，是否写入 SystemUsesLightTheme（Windows 模式：任务栏、开始菜单、通知中心等系统界面）。
+    /// 默认 true —— 与新增本项之前「两个值一起写」的行为一致，升级后外观不变。
+    /// </summary>
+    public bool AutoTimeApplyWindowsMode { get; set; } = true;
+
+    /// <summary>
+    /// 联动系统主题时，是否写入 AppsUseLightTheme（应用模式：资源管理器、设置等应用的深浅色）。
+    /// 默认 true —— 同上，保证老配置升级后行为与改造前完全一致。
+    /// </summary>
+    public bool AutoTimeApplyAppsMode { get; set; } = true;
+
+    /// <summary>
     /// 运行时覆盖色调：自动主题按时段接管时，由 App 写入当前时段的色调，不落盘。
     /// 为 null 表示色调由用户在「任务栏美化」页手动指定。
     /// </summary>

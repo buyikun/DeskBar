@@ -135,6 +135,8 @@ public partial class SettingsWindow : Window
         SelectComboByTag(CmbDayTone, s.DayAcrylicTone, "softmist");
         SelectComboByTag(CmbNightTone, s.NightAcrylicTone, "sheertights");
         ChkApplySystemTheme.IsChecked = s.AutoTimeApplySystemTheme;
+        ChkApplyWindowsMode.IsChecked = s.AutoTimeApplyWindowsMode;
+        ChkApplyAppsMode.IsChecked = s.AutoTimeApplyAppsMode;
 
         // 小部件
         ChkMusicCapsule.IsChecked = s.MusicCapsuleEnabled;
@@ -262,7 +264,7 @@ public partial class SettingsWindow : Window
             // 色块只表达"色相 + 透明度"，但柔雾/黑丝的 alpha 只有 14.5%，棋盘格几乎全露出来，
             // 用户会以为"没生效"。这里把具体值写进 ToolTip，让"几乎透明"这件事本身可见。
             var alphaPct = (int)Math.Round(color.A / 255.0 * 100);
-            target.ToolTip = $"{ToneDisplayName(tone)}\n着色 RGBA: #{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}\n不透明度: {alphaPct}%（{255 - color.A}% 透出壁纸）";
+            target.ToolTip = $"{ToneDisplayName(tone)}\n着色 ARGB: #{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}\n不透明度: {alphaPct}%（{100 - alphaPct}% 透出壁纸）";
         }
         catch (Exception ex)
         {
@@ -291,9 +293,17 @@ public partial class SettingsWindow : Window
 
             TxtCurrentPlan.Text = $"{(plan.IsLight ? "浅色界面" : "深色界面")} · {ToneDisplayName(plan.Tone)}";
 
-            var systemLight = theme.GetSystemUsesLightTheme();
-            TxtSystemTheme.Text = $"Windows 当前全局模式：{(systemLight ? "浅色" : "深色")}"
-                + (s.AutoTimeApplySystemTheme ? "（由本软件按时段托管）" : "（本软件不修改系统设置）");
+            // 两个注册表值分别受各自子开关托管：没被托管的那一项写「不改」，
+            // 免得用户误以为「关掉一项」等于「整个系统都不改」。
+            var sysNow = theme.GetSystemUsesLightTheme() ? "浅色" : "深色";
+            var appsNow = theme.GetAppsUseLightTheme() ? "浅色" : "深色";
+            var sysState = s.AutoTimeApplySystemTheme && s.AutoTimeApplyWindowsMode
+                ? $"当前 {sysNow}，由本软件按时段托管"
+                : "不改";
+            var appsState = s.AutoTimeApplySystemTheme && s.AutoTimeApplyAppsMode
+                ? $"当前 {appsNow}，由本软件按时段托管"
+                : "不改";
+            TxtSystemTheme.Text = $"Windows 模式：{sysState} · 应用模式：{appsState}";
 
             if (!s.AutoTimeTheme)
             {
@@ -339,6 +349,29 @@ public partial class SettingsWindow : Window
         if (App.Settings.AutoTimeTheme)
         {
             lines.Add("自动主题已接管材质色调，每日按白天 / 夜晚方案自动切换。");
+
+            // 到点改不改 Windows 系统设置，取决于总开关与两个分项开关的实际状态。
+            var s = App.Settings;
+            if (!s.AutoTimeApplySystemTheme)
+            {
+                lines.Add("Windows 系统主题未被托管：到点只改 DeskBar 自己的外观，不动系统设置。");
+            }
+            else
+            {
+                var targets = new List<string>();
+                if (s.AutoTimeApplyWindowsMode) targets.Add("Windows 模式");
+                if (s.AutoTimeApplyAppsMode) targets.Add("应用模式");
+
+                if (targets.Count == 0)
+                {
+                    lines.Add("总开关虽开着，但 Windows 模式与应用模式都未托管：不写注册表，也不广播刷新。");
+                }
+                else
+                {
+                    lines.Add($"到点会写入 {string.Join(" 与 ", targets)} 的注册表值，并广播刷新消息；"
+                              + (targets.Count == 1 ? "另一项保持你手选的样子。" : "两项一起改。"));
+                }
+            }
         }
 
         if (lines.Count == 0)
@@ -425,7 +458,7 @@ public partial class SettingsWindow : Window
         App.Settings.TaskbarStyle = tag;
         TxtStyleDesc.Text = tag switch
         {
-            "island_acrylic" => "居中岛屿：把开始区与托盘区各挖成独立浮岛，中间透出壁纸。需要管理员权限才能注入。",
+            "island_acrylic" => "居中岛屿：把开始区与托盘区各挖成独立浮岛，中间透出壁纸。依赖 ExplorerTAP 注入任务栏外观；注入失败时自动降级为只监视任务栏几何、不裁任务栏。",
             "acrylic" => "整条磨砂：整条任务栏铺一层毛玻璃，保留系统图标与布局。",
             "clear" => "整条全透明：整条任务栏不画底色，完全透出壁纸。",
             _ => TxtStyleDesc.Text
@@ -490,6 +523,8 @@ public partial class SettingsWindow : Window
             if (theme is null) return;
 
             var plan = theme.PlanAt(DateTime.Now);
+            // SetTheme 内部会再按「Windows 模式 / 应用模式」两个子开关决定写哪几个值；
+            // 总开关关闭时它一个字节都不写，这里保留前置判断省掉一次空调用。
             if (App.Settings.AutoTimeApplySystemTheme)
             {
                 theme.SetTheme(plan.IsLight);
@@ -556,6 +591,29 @@ public partial class SettingsWindow : Window
         var theme = App.Theme;
         if (theme is not null) theme.ApplySystemTheme = App.Settings.AutoTimeApplySystemTheme;
         UpdateThemeStatus();
+        UpdateRuntimeHints();
+    }
+
+    private void OnApplyWindowsModeChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        App.Settings.AutoTimeApplyWindowsMode = ChkApplyWindowsMode.IsChecked == true;
+        Persist();
+        var theme = App.Theme;
+        if (theme is not null) theme.ApplyWindowsMode = App.Settings.AutoTimeApplyWindowsMode;
+        UpdateThemeStatus();
+        UpdateRuntimeHints();
+    }
+
+    private void OnApplyAppsModeChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        App.Settings.AutoTimeApplyAppsMode = ChkApplyAppsMode.IsChecked == true;
+        Persist();
+        var theme = App.Theme;
+        if (theme is not null) theme.ApplyAppsMode = App.Settings.AutoTimeApplyAppsMode;
+        UpdateThemeStatus();
+        UpdateRuntimeHints();
     }
 
     // --- 时间输入：只在失焦 / 回车时校验提交，不再每敲一个字符就落盘 ---

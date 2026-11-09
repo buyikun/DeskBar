@@ -20,11 +20,20 @@ internal sealed class ThemeService : IDisposable
     private System.Threading.Timer? _scheduleTimer;
     private volatile bool _autoTimeEnabled = true;
     private volatile bool _applySystemTheme = true;
+    // Windows 把「Windows 模式」(SystemUsesLightTheme) 与「应用模式」(AppsUseLightTheme) 分成两个值，
+    // 这里也分开托管：用户可以只跟着改一个，另一个保持自己手选的样子。
+    private volatile bool _applyWindowsMode = true;
+    private volatile bool _applyAppsMode = true;
     private TimeSpan _dayStart = new(7, 0, 0);
     private TimeSpan _nightStart = new(19, 0, 0);
     private ThemePlan _dayPlan = new() { IsLight = true, Tone = "softmist" };
     private ThemePlan _nightPlan = new() { IsLight = false, Tone = "sheertights" };
     private ThemePlan? _appliedPlan;
+    // 自己写注册表会立刻触发注册表监听回声（WatchLoop 监听整个 Personalize 键，
+    // 只写 AppsUseLightTheme 也会被监听到）。拆分托管范围后回声读到的是「未受控的那个值」，
+    // 会把 PlanApplied 已经设好的 DeskBar 深浅色又覆盖回去，所以写入成功后在短时间内忽略监听事件；
+    // 窗口外仍照常响应用户手动改系统主题。
+    private long _suppressWatchUntilTick;
 
     /// <summary>系统深浅色被外部改动时触发（参数为 true = 浅色）。在后台线程上触发。</summary>
     public event Action<bool>? ThemeChanged;
@@ -48,6 +57,26 @@ internal sealed class ThemeService : IDisposable
     {
         get => _applySystemTheme;
         set => _applySystemTheme = value;
+    }
+
+    /// <summary>
+    /// 联动系统主题时，是否写入 SystemUsesLightTheme（Windows 模式：任务栏、开始菜单、通知中心）。
+    /// 默认 true，与拆分之前「两个值一起写」的行为一致。
+    /// </summary>
+    public bool ApplyWindowsMode
+    {
+        get => _applyWindowsMode;
+        set => _applyWindowsMode = value;
+    }
+
+    /// <summary>
+    /// 联动系统主题时，是否写入 AppsUseLightTheme（应用模式：资源管理器等应用的深浅色）。
+    /// 默认 true，同上。
+    /// </summary>
+    public bool ApplyAppsMode
+    {
+        get => _applyAppsMode;
+        set => _applyAppsMode = value;
     }
 
     public TimeSpan LightStart
@@ -122,7 +151,9 @@ internal sealed class ThemeService : IDisposable
 
             // 短路条件除了「方案没变」，还要求「系统当前深浅色已经和方案一致」。
             // 只看方案会在写注册表失败（非提权、被组策略挡住）后永远不再重试。
-            var systemMatches = !_applySystemTheme || GetSystemUsesLightTheme() == plan.IsLight;
+            // 注意：只比对真正被托管的那几个值。若拿一个没被托管的值当判据，
+            // 会永远判定「不一致」，每 30 秒重复写注册表并广播一次，白吃磁盘与 CPU。
+            var systemMatches = SystemThemeMatches(plan.IsLight);
             if (_appliedPlan is not null && _appliedPlan.Equals(plan) && systemMatches) return;
 
             // 只在真的需要时才写注册表并广播，避免每 30 秒无谓唤醒整个系统
@@ -188,21 +219,58 @@ internal sealed class ThemeService : IDisposable
         return true;
     }
 
-    /// <summary>写入浅/深色并广播 ImmersiveColorSet 让全系统刷新。</summary>
+    /// <summary>
+    /// 系统当前深浅色是否已经与目标方案一致。
+    /// 总开关关闭时视为一致（本软件不管系统）；否则只比对真正被托管的那几个值 ——
+    /// 没被托管的值保持用户手选的样子，不能拿来当判据，否则会每 30 秒重复写一遍注册表并广播。
+    /// </summary>
+    private bool SystemThemeMatches(bool light)
+    {
+        if (!_applySystemTheme) return true;
+        if (_applyWindowsMode && GetSystemUsesLightTheme() != light) return false;
+        if (_applyAppsMode && GetAppsUseLightTheme() != light) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// 写入浅/深色并广播 ImmersiveColorSet 让全系统刷新。
+    /// Windows 把「Windows 模式」(SystemUsesLightTheme) 与「应用模式」(AppsUseLightTheme) 分成两个值，
+    /// 这里分开受 ApplyWindowsMode / ApplyAppsMode 控制；两个都没托管时不写注册表、也不广播
+    /// —— 广播会让整个桌面重绘一次，没有写入就没有理由打扰系统。
+    /// </summary>
     public void SetTheme(bool light)
     {
         try
         {
-            using (var key = Registry.CurrentUser.OpenSubKey(PersonalizeKey, writable: true))
+            var wrote = false;
+            if (_applySystemTheme && (_applyWindowsMode || _applyAppsMode))
             {
-                if (key is not null)
+                using (var key = Registry.CurrentUser.OpenSubKey(PersonalizeKey, writable: true))
                 {
-                    key.SetValue(SystemLight, light ? 1 : 0, RegistryValueKind.DWord);
-                    key.SetValue(AppsLight, light ? 1 : 0, RegistryValueKind.DWord);
+                    if (key is not null)
+                    {
+                        if (_applyWindowsMode)
+                        {
+                            key.SetValue(SystemLight, light ? 1 : 0, RegistryValueKind.DWord);
+                            wrote = true;
+                        }
+                        if (_applyAppsMode)
+                        {
+                            key.SetValue(AppsLight, light ? 1 : 0, RegistryValueKind.DWord);
+                            wrote = true;
+                        }
+                    }
                 }
             }
-            BroadcastThemeChange();
-            Log.Info($"SetTheme(light={light}) applied");
+
+            if (wrote)
+            {
+                // 自己这次写入会立刻被 WatchLoop 监听到；在回声窗口内忽略它，
+                // 否则读到的是「未受控的那个值」，会把 DeskBar 的深浅色带偏。
+                _suppressWatchUntilTick = Environment.TickCount64 + 800;
+                BroadcastThemeChange();
+            }
+            Log.Info($"SetTheme(light={light}, systemMode={_applyWindowsMode}, appsTheme={_applyAppsMode}) wrote={wrote}");
         }
         catch (Exception ex)
         {
@@ -285,8 +353,17 @@ internal sealed class ThemeService : IDisposable
                     // 稍等一下让写入落盘
                     Thread.Sleep(120);
                     var light = GetSystemUsesLightTheme();
-                    Log.Info($"ThemeService: change detected, light={light}");
-                    ThemeChanged?.Invoke(light);
+                    if (Environment.TickCount64 < _suppressWatchUntilTick)
+                    {
+                        // 本进程刚写完注册表引出的回声，不是用户手动改系统：
+                        // 丢弃它，免得用「未受控的那个值」把已生效的方案覆盖掉。
+                        Log.Info($"ThemeService: self-write echo ignored, light={light}");
+                    }
+                    else
+                    {
+                        Log.Info($"ThemeService: change detected, light={light}");
+                        ThemeChanged?.Invoke(light);
+                    }
                 }
             }
             catch (Exception ex)

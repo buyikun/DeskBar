@@ -29,6 +29,20 @@
             <Setter Property="Margin" Value="3,4,0,8" />
         </Style>
 
+        <!--  「自动主题」页的两个顶层分区标题：比 GroupTitle 高一级，用来一眼区分「改自己」和「改系统」  -->
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="2,20,0,2" />
+        </Style>
+
+        <Style x:Key="SectionDesc" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource SubTextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="2,0,0,10" />
+        </Style>
+
         <Style x:Key="RowTitle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="13" />
             <Setter Property="VerticalAlignment" Value="Center" />
@@ -589,7 +603,7 @@
                                           SelectionChanged="OnAcrylicToneChanged">
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" IsSelected="True" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
-                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（14% 覆盖）" Tag="sheertights" />
+                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" />
                                     <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
@@ -642,7 +656,7 @@
                 <StackPanel>
                     <TextBlock Text="自动主题" Style="{StaticResource PageTitle}" />
                     <TextBlock Style="{StaticResource PageDesc}"
-                               Text="分白天与夜晚两个时段。每个时段各自决定界面用浅色还是深色、任务栏用什么材质，到点自动切换。" />
+                               Text="分白天与夜晚两个时段，每个时段各自决定界面用浅色还是深色、任务栏用什么材质。上半部分只改 DeskBar 自己的外观，下半部分决定要不要连带修改 Windows 系统主题，两者互不影响。" />
 
                     <!--  实时状态条  -->
                     <Border Style="{StaticResource StatusCard}">
@@ -676,8 +690,19 @@
                     </Border>
 
                     <Border Style="{StaticResource Card}">
-                        <DockPanel>
-                            <CheckBox x:Name="ChkAutoTimeTheme" Style="{StaticResource ToggleSwitch}"
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Width="3" Height="15" CornerRadius="{DynamicResource RadiusMicro}"
+                                        Margin="0,0,8,0" VerticalAlignment="Center"
+                                        Background="{DynamicResource AccentBrush}" />
+                                <TextBlock Text="DeskBar 自身主题" Style="{StaticResource SectionTitle}" />
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource SectionDesc}"
+                                       Text="只改 DeskBar 自己的浮岛、设置窗与托盘菜单外观，不碰 Windows。" />
+
+                            <Border Style="{StaticResource Card}">
+                                <DockPanel>
+                                    <CheckBox x:Name="ChkAutoTimeTheme" Style="{StaticResource ToggleSwitch}"
                                       DockPanel.Dock="Right" VerticalAlignment="Center"
                                       Checked="OnAutoTimeThemeChanged" Unchecked="OnAutoTimeThemeChanged" />
                             <StackPanel>
@@ -769,7 +794,7 @@
                                           SelectionChanged="OnDayToneChanged">
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" IsSelected="True" />
-                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（14% 覆盖）" Tag="sheertights" />
+                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" />
                                     <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
@@ -824,31 +849,78 @@
                                           SelectionChanged="OnNightToneChanged">
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
-                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（14% 覆盖）" Tag="sheertights" IsSelected="True" />
+                                    <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" IsSelected="True" />
                                     <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
                                 <Border x:Name="NightToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
                                         Background="Transparent" />
                             </Grid>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Border>
 
-                    <TextBlock Text="系统联动" Style="{StaticResource GroupTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <DockPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Width="3" Height="15" CornerRadius="{DynamicResource RadiusMicro}"
+                                        Margin="0,0,8,0" VerticalAlignment="Center"
+                                        Background="{DynamicResource AccentBrush}" />
+                                <TextBlock Text="Windows 系统主题" Style="{StaticResource SectionTitle}" />
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource SectionDesc}"
+                                       Text="这一段改的是 Windows 自己的深浅色设置，等于替你在「设置 → 个性化 → 颜色」里点一下。" />
+
+                            <TextBlock Style="{StaticResource WarnHint}"
+                                       Text="注意：开启后 DeskBar 会写入系统注册表并广播刷新消息，效果等同于手动在「设置 → 个性化 → 颜色」里切换。若完全不想影响系统外观，请关闭下面的总开关。" />
+
+                            <DockPanel Margin="0,10,0,0">
                                 <CheckBox x:Name="ChkApplySystemTheme" Style="{StaticResource ToggleSwitch}"
                                           DockPanel.Dock="Right" VerticalAlignment="Center"
                                           Checked="OnApplySystemThemeChanged" Unchecked="OnApplySystemThemeChanged" />
                                 <StackPanel>
-                                    <TextBlock Text="同时切换 Windows 全局深浅色" Style="{StaticResource RowTitle}" />
+                                    <TextBlock Text="按时段同步 Windows 主题" Style="{StaticResource RowTitle}" />
                                     <TextBlock Style="{StaticResource RowDesc}"
-                                               Text="到点时一并修改系统设置里的「应用模式」与「Windows 模式」，资源管理器、开始菜单等会跟着变。" />
+                                               Text="总开关。关闭后一个字节都不写，上面的「DeskBar 自身主题」照常按时段切换。" />
                                 </StackPanel>
                             </DockPanel>
-                            <TextBlock Style="{StaticResource WarnHint}"
-                                       Text="注意：开启后 DeskBar 会写入系统注册表并广播刷新消息，效果等同于手动在「设置 → 个性化 → 颜色」里切换。若不想影响系统外观，请关闭此项，仅让 DeskBar 自身跟随。" />
+
+                            <!--  细粒度子项：分别对应 SystemUsesLightTheme 与 AppsUseLightTheme 两个注册表值  -->
+                            <StackPanel Margin="18,12,0,0">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsChecked, ElementName=ChkApplySystemTheme}" Value="False">
+                                                <Setter Property="Opacity" Value="0.45" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+
+                                <DockPanel>
+                                    <CheckBox x:Name="ChkApplyWindowsMode" Style="{StaticResource ToggleSwitch}"
+                                              DockPanel.Dock="Right" VerticalAlignment="Center"
+                                              IsEnabled="{Binding IsChecked, ElementName=ChkApplySystemTheme}"
+                                              Checked="OnApplyWindowsModeChanged" Unchecked="OnApplyWindowsModeChanged" />
+                                    <StackPanel>
+                                        <TextBlock Text="Windows 模式（任务栏 / 开始菜单 / 通知中心）" Style="{StaticResource RowTitle}" />
+                                        <TextBlock Style="{StaticResource RowDesc}"
+                                                   Text="写入 SystemUsesLightTheme。关掉后这些系统界面保持你现在手选的样子。" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <DockPanel Margin="0,10,0,0">
+                                    <CheckBox x:Name="ChkApplyAppsMode" Style="{StaticResource ToggleSwitch}"
+                                              DockPanel.Dock="Right" VerticalAlignment="Center"
+                                              IsEnabled="{Binding IsChecked, ElementName=ChkApplySystemTheme}"
+                                              Checked="OnApplyAppsModeChanged" Unchecked="OnApplyAppsModeChanged" />
+                                    <StackPanel>
+                                        <TextBlock Text="应用模式（资源管理器 / 设置等应用）" Style="{StaticResource RowTitle}" />
+                                        <TextBlock Style="{StaticResource RowDesc}"
+                                                   Text="写入 AppsUseLightTheme。与上面一项互不影响，可以只开其中一个。" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>

@@ -124,6 +124,8 @@ public partial class App : System.Windows.Application
         _theme.DayPlan = new ThemePlan { IsLight = _settings.DayThemeLight, Tone = _settings.DayAcrylicTone };
         _theme.NightPlan = new ThemePlan { IsLight = _settings.NightThemeLight, Tone = _settings.NightAcrylicTone };
         _theme.ApplySystemTheme = _settings.AutoTimeApplySystemTheme;
+        _theme.ApplyWindowsMode = _settings.AutoTimeApplyWindowsMode;
+        _theme.ApplyAppsMode = _settings.AutoTimeApplyAppsMode;
 
         // 配置全部就位后才启用：此后只会用完整配置做一次判断
         _theme.AutoTimeEnabled = _settings.AutoTimeTheme;
@@ -477,6 +479,8 @@ public partial class App : System.Windows.Application
             _theme.DayPlan = new ThemePlan { IsLight = _settings.DayThemeLight, Tone = _settings.DayAcrylicTone };
             _theme.NightPlan = new ThemePlan { IsLight = _settings.NightThemeLight, Tone = _settings.NightAcrylicTone };
             _theme.ApplySystemTheme = _settings.AutoTimeApplySystemTheme;
+            _theme.ApplyWindowsMode = _settings.AutoTimeApplyWindowsMode;
+            _theme.ApplyAppsMode = _settings.AutoTimeApplyAppsMode;
             _theme.AutoTimeEnabled = _settings.AutoTimeTheme;
 
             // 配置改完后，让任务栏/浮岛的色调立刻跟上新方案（例如刚把夜晚色调改成别的）
