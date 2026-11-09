@@ -103,9 +103,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:/ai/deskbar/publish.ps1
 cd /d/ai/deskbar && bash deploy.sh
 ```
 
-**⚠️ 两个 `.ps1` 都不传播退出码**（脚本内无 `exit`，`powershell -File` 外层恒返回 0）。判断成败只能靠：
-- 读 `build_diag.log` 末尾（成功会有 `已成功生成。`，失败是 `1 个错误` 之类）；
-- 或查 `$LASTEXITCODE`。
+**⚠️ 两个 `.ps1` 都不传播退出码**（脚本内无 `exit`，`powershell -File` 外层恒返回 0）。判断成败必须三条同时成立（2026-11-10 实测校准）：
+- **跑前先删 `build_diag.log`** —— `-flp` 是覆盖写，dotnet 早崩会残留上一次的成功日志，直接读会得到「陈旧成功」假绿；
+- `build_diag.log` 的 **mtime 已更新**，且**全文**含 `已成功生成。`（**它不在文件末尾**：实测在第 80267 行，末尾四行是警告数 / 错误数 / 空行 / `已用时间 …`，只 `tail` 会漏判）；
+- 末尾段含 `0 个错误`（失败会是 `1 个错误` 之类）。
+- 脚本把 9 个环境变量重定向到仓库内，且日志路径相对 cwd，**必须在 `D:\ai\deskbar` 下执行**；判据串是中文，**放 bash 判，不要放 PowerShell**。
+- `$LASTEXITCODE` 只在同一条 PowerShell 会话里可查，跨进程取不到——不能作为独立判据。
 
 **完整链条固定为 `build.ps1` → `publish.ps1` → `deploy.sh`**。只 build 不 publish 会让 `out_publish\` 停留在旧版，制造「改了却没生效」的假象。
 
@@ -118,12 +121,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:/ai/deskbar/sync-frontend.
 # 重置同步基线
 powershell -NoProfile -ExecutionPolicy Bypass -File D:/ai/deskbar/sync-frontend.ps1 -Init
 
+# ⚠️ `python` 不在 PATH —— WindowsApps 里那个是商店桩（无输出、EXIT=49）。
+# 用 DSH 运行时自带的解释器（实测 Python 3.12.14）：
+#   $PY = "D:/DeepSeek/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe"
 # 窗口枚举：pid / hwnd / 可见性 / 矩形 / 类名 / 标题
-python scripts/winlist.py [pid]
-# 闪烁检测：抓 50 帧只测描边区域灰度，避开文字刷新造成的假阳性
-python scripts/flick7.py mon|tray
-# 任务栏截图
-powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1
+& $PY scripts/winlist.py [pid]
+# 闪烁检测：抓 50 帧只测描边区域灰度，避开文字刷新造成的假阳性（无基线阈值，只能靠改动前后对比）
+& $PY scripts/flick7.py mon|tray
+# 任务栏截图：-Out 是必填参数，漏了报 MissingMandatoryParameter；默认抓屏幕底部 160px
+powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scratch/verify/taskbar.png
 ```
 
 ### 测试现状（别高估）
@@ -139,7 +145,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1
 ### 4.1 编辑安全（最高优先级）
 - **禁止用跨行正则（`re.DOTALL` / `re.S` / 跨行非贪婪匹配）批量改 C# 源码**。曾因贪婪匹配把 `MusicCapsuleWindow.xaml.cs` 整块 110 行切掉。
 - 替换必须用**含上下文的精确唯一字面量**，并在替换前断言命中数为 1。
-- **保持原行尾**：仓库内 `.cs` / `.xaml` 普遍是 CRLF，改前检测，写回沿用，禁止混入 LF。
+- **保持原行尾**：改前必须检测，写回**沿用该文件原有的行尾**。**本仓实测普遍是 LF，不是 CRLF**（`src/DeskBar` 下 42 个 `.cs/.xaml` 有 40 个纯 LF，唯二纯 CRLF 的是 `src/DeskBar/App.xaml.cs` 与 `src/DeskBar/Views/SettingsWindow.xaml`，`git ls-files --eol` 显示它们 `w/crlf`）——旧版此处写的「普遍是 CRLF」已被实测证伪。等价的可执行检查 = `git diff --numstat` 的增删数不得等于文件总行数（整文件重写＝行尾翻转）。`core.autocrlf=true` 下 `git diff` 会打印 `LF will be replaced by CRLF` 警告，那是索引规范化的提示，不代表工作区已被改动。
 - **编码保护**：`AppSettings.cs` 等文件含中文 XML 注释，禁用外部重格式化工具整体覆盖。
 - **`.ps1` 脚本禁止出现任何非 ASCII 字符**（含中文注释）。Windows PowerShell 5.1 对无 BOM 的 `.ps1` 按 OEM/ANSI 解码，中文会直接 `ParserError`。`sync-frontend.ps1` 文件头就写死了这条约束。
 - **删除目录前必须展开看内容，不能靠目录名推断归属**。曾把 `C:\Users\Administrator\.local` 判为 uv 残留、准备整个删除，展开后发现它是 billion-context 的图片缓存（`state\billion-context\retrieve\img\session-*\`）加 opencode 的 `state\opencode\service.json`。`.local` / `.config` / `.cache` 这类约定俗成目录会被多个工具共用，**`.local\bin` 为空不代表整个 `.local` 可删**。同理，`D:\app\<name>` 这类手工收纳目录里也可能混着别人的东西。
@@ -197,7 +203,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1
 - `NOACTIVATE` 窗口下 `MouseEnter` / `MouseLeave` 不可靠，悬停只能轮询光标坐标。
 - 文本宽度有两个反向陷阱：`TxtArtist` 必须设 `Width = NaN` 交给 `ScrollViewer` 测量；而行级 LRC 的 `TxtLyricPlayed` 反而必须设自然宽度（`NaN` 会被钳到 164px）。
 - 右键菜单需临时摘掉 `NOACTIVATE` 抢前台，关闭后还原并 `PostMessage(WM_NULL)` 归还前台。
-- **歌词对象缓存是纯内存 `ConcurrentDictionary`，无 TTL、无容量上限**（`LyricService`）。长会话会随曲目数线性增长——这是已知设计取舍，属于内存而非磁盘，不违反「拒绝磁盘缓存」原则。
+- **歌词对象缓存是纯内存 `ConcurrentDictionary`，无 TTL、无容量上限**（`LyricService._cache`）。长会话会随曲目数线性增长——这是已知设计取舍，属于内存而非磁盘，不违反「拒绝磁盘缓存」原则。
+- **但歌词的「失败」绝对不能缓存（2026-11-10 踩过的坑，别再犯）**：`TryGetLocalQrc`（`src/DeskBar/Services/LyricService.cs:648`）筛选候选时带「文件名时长与上报时长 4 秒容差」判据（`:686-699`），而**切歌瞬间上报的 `duration` 还是上一首的**，第一次匹配必然落空；解除这个暂时性失败，靠的正是 3 秒轮询带来的自动重试。曾加过失败缓存（本地 5min / 在线 45s），代价是把「下一轮本来就能成功」的歌冻住数分钟，用户看到的就是**「切歌后一直没歌词」**。封面侧有 `CoverMissTtlMs` **不代表**歌词侧也能有——两者的失败含义不同（前者是「这张图确实没有」，后者常常只是「这一瞬间还没准备好」）。
+- 诊断打点 `Log.Debug($"lyrics fetch: …")` 打在**真发起**处（`_cache` 未命中时），出现一行 = 回退链跑了一次。
 
 ### 4.7 硬件监控采集
 - 采样由 **`DispatcherTimer` 在 UI 线程每 1000ms 驱动**，当前没有后台线程。
