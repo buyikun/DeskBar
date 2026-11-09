@@ -604,7 +604,7 @@
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" IsSelected="True" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
                                     <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" />
-                                    <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="白玉磨砂 · 暖米白薄磨砂（55% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
                                 <Border x:Name="ToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
@@ -795,7 +795,7 @@
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" IsSelected="True" />
                                     <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" />
-                                    <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="白玉磨砂 · 暖米白薄磨砂（55% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
                                 <Border x:Name="DayToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
@@ -850,7 +850,7 @@
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
                                     <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" IsSelected="True" />
-                                    <ComboBoxItem Content="白玉磨砂 · 奶白厚磨砂（63% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="白玉磨砂 · 暖米白薄磨砂（55% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
                                 <Border x:Name="NightToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"

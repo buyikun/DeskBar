@@ -332,7 +332,11 @@ public static class NativeTaskbarAppearanceService
         {
             "softmist" => 0x25525252, // 浅色：柔雾 (减少白色覆盖)
             "sheertights" => 0x25323232, // 深色：黑丝 (沉稳透感)
-            "light" => 0xA0FFFFFF,    // 白玉磨砂毛玻璃
+            // 白玉磨砂：原先 0xA0FFFFFF（63% 纯白）在亮壁纸上合成接近 #F3F3F3，
+            // 整条任务栏像一块发光的白板；暗壁纸上又成了 #ABABAB 的灰白带，都刺眼。
+            // 改成 55% 暖米白：亮壁纸合成 #E5E3DF（亮度 -14%），暗壁纸 #8E8C87，
+            // 深字对比度仍 ≥5.1:1（WCAG AA 4.5:1），保留「白/奶白」语义但不再抢眼。
+            "light" => 0x8CEAE6DE,    // 白玉磨砂毛玻璃（暖米白薄磨砂）
             "dark" => 0x90202020,     // 黑曜石磨砂毛玻璃
             "natural" => 0x00000000,  // 图中原味透出壁纸
             // 注意加 u 后缀：0xA0FFFFFF 这类高位字面量是 uint，而 0x25525252 是 int，

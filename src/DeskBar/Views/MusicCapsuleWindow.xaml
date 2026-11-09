@@ -26,13 +26,28 @@
         <SolidColorBrush x:Key="CapsuleHoverBrush" Color="#33FFFFFF"/>
         <SolidColorBrush x:Key="CapsulePressedBrush" Color="#55FFFFFF"/>
 
+        <!-- 前景同样按 tone 下发。胶囊贴在任务栏上，light / softmist 下任务栏是浅色，
+             白字对比度不足 2:1（WCAG AA 要 4.5:1）；只有深色黑丝系
+             才是白字。默认值取深色系，与首次 ApplyTone 之前的观感一致。 -->
+        <SolidColorBrush x:Key="CapsuleTextBrush" Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="CapsuleTextMutedBrush" Color="#99FFFFFF"/>
+        <SolidColorBrush x:Key="CapsuleTextFaintBrush" Color="#55FFFFFF"/>
+        <SolidColorBrush x:Key="CapsuleButtonForegroundBrush" Color="#E6FFFFFF"/>
+        <SolidColorBrush x:Key="CapsuleHoverForegroundBrush" Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="CapsuleCoverBackBrush" Color="#22FFFFFF"/>
+        <LinearGradientBrush x:Key="CapsuleControlsMaskBrush" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#00000000" Offset="0"/>
+            <GradientStop Color="#E6141414" Offset="0.40"/>
+            <GradientStop Color="#E6141414" Offset="1"/>
+        </LinearGradientBrush>
+
         <Style x:Key="CapsuleButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="24"/>
             <Setter Property="Height" Value="24"/>
             <Setter Property="Margin" Value="1,0"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Foreground" Value="#E6FFFFFF"/>
+            <Setter Property="Foreground" Value="{DynamicResource CapsuleButtonForegroundBrush}"/>
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -48,13 +63,13 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource CapsuleHoverBrush}"/>
-                                <Setter Property="Foreground" Value="#FFFFFFFF"/>
+                                <Setter Property="Foreground" Value="{DynamicResource CapsuleHoverForegroundBrush}"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource CapsulePressedBrush}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="#55FFFFFF"/>
+                                <Setter Property="Foreground" Value="{DynamicResource CapsuleTextFaintBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -80,7 +95,7 @@
                     Grid.Column="0"
                     Width="34" Height="34"
                     CornerRadius="7"
-                    Background="#22FFFFFF"
+                    Background="{DynamicResource CapsuleCoverBackBrush}"
                     ClipToBounds="True"
                     Cursor="Hand"
                     VerticalAlignment="Center">
@@ -89,7 +104,7 @@
                                Text="&#xE8D6;"
                                FontFamily="Segoe MDL2 Assets"
                                FontSize="16"
-                               Foreground="#99FFFFFF"
+                               Foreground="{DynamicResource CapsuleTextMutedBrush}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"/>
                     <Image x:Name="ImgCover" Stretch="UniformToFill"/>
@@ -103,7 +118,7 @@
                 <TextBlock x:Name="TxtTitle"
                            Text="未知曲目"
                            FontSize="10.5"
-                           Foreground="#80FFFFFF"
+                           Foreground="{DynamicResource CapsuleTextMutedBrush}"
                            TextTrimming="CharacterEllipsis"/>
 
                 <!-- 第二行：实时歌词（无歌词时回落显示歌手）。放不下时由代码驱动跑马灯 -->
@@ -126,13 +141,13 @@
                         <TextBlock x:Name="TxtArtist"
                                    Text="未知歌手"
                                    FontSize="15"
-                                   Foreground="#80FFFFFF"
+                                   Foreground="{DynamicResource CapsuleTextMutedBrush}"
                                    HorizontalAlignment="Left"
                                    VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtLyricPlayed"
                                    Text=""
                                    FontSize="15"
-                                   Foreground="#FFFFFFFF"
+                                   Foreground="{DynamicResource CapsuleTextBrush}"
                                    HorizontalAlignment="Left"
                                    VerticalAlignment="Center"
                                    ClipToBounds="True"
@@ -149,14 +164,8 @@
                     VerticalAlignment="Center"
                     CornerRadius="6,0,0,6"
                     Padding="4,0,0,0"
+                    Background="{DynamicResource CapsuleControlsMaskBrush}"
                     Visibility="Collapsed">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                        <GradientStop Color="#00000000" Offset="0"/>
-                        <GradientStop Color="#E6141414" Offset="0.40"/>
-                        <GradientStop Color="#E6141414" Offset="1"/>
-                    </LinearGradientBrush>
-                </Border.Background>
                 <StackPanel x:Name="PanelControls"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">

@@ -552,6 +552,15 @@ public partial class MusicCapsuleWindow : Window
             Resources["CapsuleBorderBrush"] = TonePalette.BorderBrush(tone);
             Resources["CapsuleHoverBrush"] = TonePalette.HoverBrush(tone);
             Resources["CapsulePressedBrush"] = TonePalette.PressedBrush(tone);
+            // 前景必须与底色同向：light / softmist 下任务栏是浅色，
+            // 白字对比度不足 2:1（WCAG AA 要 4.5:1），这里整批换成深色系。
+            Resources["CapsuleTextBrush"] = TonePalette.CapsuleTextBrush(tone);
+            Resources["CapsuleTextMutedBrush"] = TonePalette.CapsuleTextMutedBrush(tone);
+            Resources["CapsuleTextFaintBrush"] = TonePalette.CapsuleTextFaintBrush(tone);
+            Resources["CapsuleButtonForegroundBrush"] = TonePalette.CapsuleButtonForegroundBrush(tone);
+            Resources["CapsuleHoverForegroundBrush"] = TonePalette.CapsuleHoverForegroundBrush(tone);
+            Resources["CapsuleCoverBackBrush"] = TonePalette.CapsuleCoverBackBrush(tone);
+            Resources["CapsuleControlsMaskBrush"] = TonePalette.CapsuleControlsMaskBrush(tone);
         }
         catch (Exception ex)
         {

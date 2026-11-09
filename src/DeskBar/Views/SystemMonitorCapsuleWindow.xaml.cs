@@ -105,7 +105,13 @@ public partial class SystemMonitorCapsuleWindow : Window
     {
         try
         {
-            Resources["CapsuleBorderBrush"] = TonePalette.BorderBrush(_settings.EffectiveTone);
+            var tone = _settings.EffectiveTone;
+            Resources["CapsuleBorderBrush"] = TonePalette.BorderBrush(tone);
+            // 前景必须与底色同向：light / softmist 下任务栏是浅色，
+            // 白字对比度不足 2:1（WCAG AA 要 4.5:1），这里整批换成深色系。
+            Resources["CapsuleTextBrush"] = TonePalette.CapsuleTextBrush(tone);
+            Resources["CapsuleTextMutedBrush"] = TonePalette.CapsuleTextMutedBrush(tone);
+            Resources["CapsuleTrackBrush"] = TonePalette.CapsuleTrackBrush(tone);
         }
         catch (Exception ex)
         {

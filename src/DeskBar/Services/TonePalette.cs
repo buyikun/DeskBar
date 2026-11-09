@@ -216,6 +216,79 @@ internal static class TonePalette
         Cached($"menusep:{IsDark(tone)}",
             IsDark(tone) ? Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1A, 0x00, 0x00, 0x00));
 
+    // ---------------- 浮岛胶囊：前景 / 交互色 ----------------
+    // 系统监控浮岛与音乐胶囊直接贴在任务栏上，底色随 tone 变化 —— light / softmist
+    // 下任务栏是浅色（light 现为 55% 暖米白 #EAE6DE，早期曾是 63% 纯白），白字对比度
+    // 不足 2:1，远低于 WCAG AA 的 4.5:1。所以前景和描边一样不能写死在 XAML 里。
+    // 取值与详情面板同一套明暗档位，但键名独立：胶囊背后是任务栏，
+    // 面板背后是自带 PanelColor，任一侧将来单独调色都不会牵连另一边。
+
+    /// <summary>胶囊主文字：指标数值、已唱歌词、进度条填充（按钮常态前景另有入口）。</summary>
+    public static Brush CapsuleTextBrush(string? tone) =>
+        Cached($"capsuletxt:{IsDark(tone)}",
+            IsDark(tone) ? Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
+
+    /// <summary>胶囊次要文字：指标标签、歌名-歌手、未唱歌词、封面占位图标。</summary>
+    public static Brush CapsuleTextMutedBrush(string? tone) =>
+        Cached($"capsulemuted:{IsDark(tone)}",
+            IsDark(tone) ? Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x99, 0x00, 0x00, 0x00));
+
+    /// <summary>禁用态按钮前景，比次要文字再弱一档。</summary>
+    public static Brush CapsuleTextFaintBrush(string? tone) =>
+        Cached($"capsulefaint:{IsDark(tone)}",
+            IsDark(tone) ? Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x55, 0x00, 0x00, 0x00));
+
+    /// <summary>按钮常态前景。深色底原是写死的 #E6FFFFFF，这里原值保留、只补浅色底一档。</summary>
+    public static Brush CapsuleButtonForegroundBrush(string? tone) =>
+        Cached($"capsulebtnfg:{IsDark(tone)}",
+            IsDark(tone) ? Color.FromArgb(0xE6, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xE6, 0x1A, 0x1A, 0x1A));
+
+    /// <summary>按钮悬停前景：抬到主文字级。</summary>
+    public static Brush CapsuleHoverForegroundBrush(string? tone) =>
+        Cached($"capsulehoverfg:{IsDark(tone)}",
+            IsDark(tone) ? Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xFF, 0x00, 0x00, 0x00));
+
+    /// <summary>指标进度条轨道。</summary>
+    public static Brush CapsuleTrackBrush(string? tone) =>
+        Cached($"capsuletrack:{IsDark(tone)}",
+            IsDark(tone) ? Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x33, 0x00, 0x00, 0x00));
+
+    /// <summary>无封面时的占位方块底。</summary>
+    public static Brush CapsuleCoverBackBrush(string? tone) =>
+        Cached($"capsulecover:{IsDark(tone)}",
+            IsDark(tone) ? Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x22, 0x00, 0x00, 0x00));
+
+    /// <summary>
+    /// 音乐胶囊控制区遮罩：从完全透明渐变到遮罩色，让歌词平滑淡出到按钮下方。
+    /// 遮罩必须与前景同向 —— 深底用深遮罩配白字、浅底用浅遮罩配黑字，
+    /// 否则浅色 tone 下会出现「黑字压在深色遮罩上」。
+    /// 这个不是纯色，所以不走 Cached(Color) 而要自己造渐变并 Freeze。
+    /// </summary>
+    public static Brush CapsuleControlsMaskBrush(string? tone)
+    {
+        var key = $"capsulemask:{IsDark(tone)}";
+        lock (Cache)
+        {
+            if (Cache.TryGetValue(key, out var cached)) return cached;
+
+            var mask = IsDark(tone)
+                ? Color.FromArgb(0xE6, 0x14, 0x14, 0x14)
+                : Color.FromArgb(0xE6, 0xF2, 0xF2, 0xF2);
+            var brush = new LinearGradientBrush(
+                new GradientStopCollection
+                {
+                    new GradientStop(Color.FromArgb(0x00, mask.R, mask.G, mask.B), 0.0),
+                    new GradientStop(mask, 0.40),
+                    new GradientStop(mask, 1.0)
+                },
+                new System.Windows.Point(0, 0),
+                new System.Windows.Point(1, 0));
+            brush.Freeze();
+            Cache[key] = brush;
+            return brush;
+        }
+    }
+
     // ---------------- 画刷缓存 ----------------
 
     private static readonly Dictionary<string, Brush> Cache = new();
