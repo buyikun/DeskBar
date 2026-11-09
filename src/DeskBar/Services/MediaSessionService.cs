@@ -703,6 +703,12 @@ internal sealed class MediaSessionService : IDisposable
                     try
                     {
                         var lyrics = await LyricService.GetLyricsAsync(title, artist, _currentDuration, sourceKind);
+
+                        // 曲目身份校验：await 期间可能已经切歌，迟到的结果绝不能落到新曲目上。
+                        // 判据与下面的网络封面补全一致（CurrentInfo.Title == title）。
+                        if (CurrentInfo == null || CurrentInfo.Title != title || CurrentInfo.Artist != artist)
+                            return;
+
                         _currentTrackLyrics = lyrics;
                         CheckLyricProgress();
 
@@ -766,6 +772,11 @@ internal sealed class MediaSessionService : IDisposable
             };
 
             Log.Debug($"media info: title='{info.Title}' artist='{info.Artist}' app='{info.FriendlyAppName}' playing={isPlaying} thumb={thumbnailImage != null}");
+            // 曲目身份变了：上一首的歌词立刻作废，否则 100ms 的进度定时器
+            // 还会按旧歌词继续发 LyricUpdated，把刚切走的歌词又贴回胶囊。
+            if (CurrentInfo != null && (CurrentInfo.Title != info.Title || CurrentInfo.Artist != info.Artist))
+                _currentTrackLyrics = null;
+
             _lastTrackId = trackId;
             CurrentInfo = info;
             MediaInfoChanged?.Invoke(info);

@@ -156,7 +156,7 @@ internal static class KrcDecoder
     /// 词级标签 &lt;起点,时长&gt; 或 &lt;起点,时长,0&gt;，后面紧跟文本。
     /// 第三个字段是可选的（部分 KRC 只给两个），所以用 (?:\s*,[^>]*)? 兜住。
     /// </summary>
-    private static readonly Regex WordRegex = new(@"<(\d+)\s*,\s*(\d+)(?:\s*,[^>]*)?>([^<]*)", RegexOptions.Compiled);
+    private static readonly Regex WordRegex = new(@"<(-?\d+)\s*,\s*(\d+)(?:\s*,[^>]*)?>([^<]*)", RegexOptions.Compiled);
 
     /// <summary>
     /// 行正文里可能残留的 LRC 时间戳前缀（一个或多个），例如 "[00:05.00]"。

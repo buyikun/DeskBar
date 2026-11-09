@@ -170,6 +170,13 @@ internal static class LyricService
 
     private static readonly ConcurrentDictionary<string, TrackLyrics> _cache = new(StringComparer.OrdinalIgnoreCase);
 
+    // 注意：这里**故意不缓存失败**。
+    // TryGetLocalQrc 的候选筛选带「文件名时长与上报时长 4 秒容差」判据，
+    // 而切歌瞬间上报的 duration 还是上一首的，第一次匹配必然落空；
+    // 解除这个暂时性失败，靠的正是 3 秒轮询带来的自动重试。
+    // 曾加过失败缓存（本地 5min / 在线 45s），代价是把「下一轮本来就能成功」的歌
+    // 冻住数分钟，用户看到的就是「切歌后一直没歌词」——已回退，不要再加回来。
+
     static LyricService()
     {
         _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
@@ -189,6 +196,9 @@ internal static class LyricService
         string cacheKey = $"{kind}|{title.Trim()}|{artist?.Trim()}";
         if (_cache.TryGetValue(cacheKey, out var cached))
             return cached;
+
+        // 诊断打点：这一行出现几次，就是回退链真正跑了几次。
+        Log.Debug($"lyrics fetch: kind={kind} key='{cacheKey}'");
 
         TrackLyrics? result = kind switch
         {
@@ -215,6 +225,9 @@ internal static class LyricService
             _cache[cacheKey] = result;
             return result;
         }
+
+        // 这一轮没取到就如实返回 null，交给下一轮 3 秒轮询重试
+        // （切歌瞬间 duration 还是旧值，第二次通常就能命中）。
         return null;
     }
 
