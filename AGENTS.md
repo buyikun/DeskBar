@@ -86,7 +86,9 @@
 ### 2.5 音色（tone）与昼夜方案
 - 合法 tone 只有 5 个：`light`、`dark`、`natural`、`softmist`、`sheertights`（见 `AppSettings.IsKnownTone`）。
 - 深浅判定：`sheertights` / `dark` = 深色底；`softmist` / `light` = 浅色底；`natural` = 跟随系统。
-- 任务栏着色：`softmist=0x25525252`、`sheertights=0x25323232`、`light=0xA0FFFFFF`、`dark=0x90202020`、`natural=0x00000000`。
+- 任务栏着色：`softmist=0x25525252`、`sheertights=0x25323232`、`light=0x8CEAE6DE`、`dark=0x90202020`、`natural=0x00000000`。
+  - `light` 旧值 `0xA0FFFFFF`（63% 纯白）已废：亮壁纸合成后近 `#F3F3F3`、暗壁纸成 `#ABABAB`，整条任务栏像发光白板，用户实测报「刺眼突兀」。现为 **55% 暖米白 `#EAE6DE`**，亮壁纸合成 `#E5E3DF`（亮度降 14%），深字对比度仍 ≥5.1:1。
+  - 改 `light` 的 alpha/底色，必须同时改这 **5 处**：`GetColorForTone` 定义、`SettingsWindow.xaml:607/:798/:853` 三处下拉文案的「55% 覆盖」、`AGENTS.md` 本行。色块 ToolTip 是代码算的（`SettingsWindow.xaml.cs:266-267`），不用手改。
 - **渲染路径一律读 `App.Settings.EffectiveTone`，禁止直接读 `AcrylicTone`**。自动主题按时段把结果写进 `RuntimeTone`（`[JsonIgnore]`，不落盘），`EffectiveTone => RuntimeTone ?? AcrylicTone`。读错会让描边比底色慢一拍。
 - 昼夜方案是显式字段（`DayThemeLight`/`NightAcrylicTone` 等），不再是「读系统深浅色反推」。
 
@@ -183,7 +185,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scrat
 - **新增设置项要同步四处**：`AppSettings` 字段 + 默认值 → XAML `x:Name` + 事件 → `LoadFromSettings()` 赋值 → 事件处理器里带 `if (_loading) return;` 守卫再 `Persist()`。漏掉 `_loading` 守卫，载入期就会把用户配置回写成默认值。
 - 任何 `ComboBox` 选项必须带 `Tag`，且值要出现在 `IsKnownTone` / `Normalize` 白名单里，否则启动时静默回落。
 - 设置**没有防抖、也不是原子写**（直接 `File.WriteAllText`）。滑块拖动、白名单逐字输入都会逐次落盘。新增高频控件前先确认写盘频率。
-- 改 tone 的 alpha 值，必须同步更新下拉项里的「xx% 覆盖」文案与色块 ToolTip（这些是硬编码文本）。
+- 改 tone 的 alpha 值，必须同步更新下拉项里的「xx% 覆盖」文案（`SettingsWindow.xaml` 里三处 ComboBox 各一行，共 3 处硬编码文本）。**色块 ToolTip 不用手改**——`SettingsWindow.xaml.cs:266-267` 由 `color.A` 现算，改定义即自动跟随（旧版本此处把它们都写成「硬编码文本」）。
 - `RuntimeTone` 是 `[JsonIgnore]` 运行时态。**误加持久化会让用户手选的色调被时段值覆盖。**
 - 关闭设置窗是 `e.Cancel = true` + `Hide()`，**不是退出进程**。
 
