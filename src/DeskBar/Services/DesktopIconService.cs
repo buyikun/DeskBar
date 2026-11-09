@@ -6,10 +6,9 @@ namespace DeskBar.Services;
 /// <summary>
 /// 桌面图标显隐。
 /// 双路径策略（本机实测支撑）：
-///   - 切换：向 SHELLDLL_DefView 发 WM_COMMAND 29698，让 explorer 自己切
-///           —— 这样注册表 HideIcons 由 shell 维护，与右键菜单天然一致。
-///   - 回读：读 HKCU\...\Explorer\Advanced\HideIcons（1 = 已隐藏）。
-///   - 兜底：直接 ShowWindow(SysListView32)，用于 shell 无响应时。
+///   - 状态：读 HKCU\...\Explorer\Advanced\HideIcons（1 = 已隐藏），另以 ListView 可见性作交叉校验；
+///   - 切换/显式设置：对 SysListView32 执行 ShowWindow(SW_HIDE / SW_SHOW) 后失效重绘，日志留痕（SW 结果、Win32 错误码、前后可见性）；
+///   - 找不到桌面 ListView 时只告警，不改变任何状态。
 /// </summary>
 internal sealed class DesktopIconService
 {
