@@ -335,6 +335,14 @@ Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{Comman
 
 **验收**：`releases/latest` 的 `tag_name` 为新版本，且 `assets[].state == "uploaded"`、`size` 与本地 zip 一致。
 
+**Release 正文写法（2026-11-11 用户明确要求，已据此重写 v2.5.0）**：
+
+- **正文是给用户看的版本说明，不是开发过程记录。** 只写「新增了什么功能 / 修复了什么 / 删掉了什么」，**不写实现原理、不写调试经过、不写踩坑复盘**（`AllowsTransparency` 为什么不行、`SetWindowRgn` 裁不动材质、424ms 实测、`DWMWCP_ROUND` 半径多少——这些属于 `AGENTS.md` 与 commit body，不属于 Release）。
+- 分三节：`## 新增功能` / `## 修复` / `## 删除与调整`（没有内容的节直接省略）。每条一句话，从用户可感知的行为描述（「右键不再穿透」而不是「补 alpha=1 的 #01000000」）。
+- **不写「已知取舍」里需要用户理解内部机制才能读懂的内容**；真正的取舍用一句人话讲（如「固定浅色底，深色系统下白字压浅底」）。
+- 标题（`name`）同理，用一句功能概括，不堆实现术语。**标题与 tag 解耦**：`tag_name` 必须是 `vX.Y.Z`（软件内「检查更新」按它比对），`name` 可以是 `vX.Y.Z` 或 `vX.Y.Z — 一句概括`。
+- 正文**允许事后修订**：`PATCH https://api.github.com/repos/buyikun/DeskBar/releases/<id>`，body 带 `{"body": "..."}`；改完回读 `releases/latest` 核对。
+
 **两个坑**：
 - **bash 里禁止手写含 `{` / `$` 的 JSON**（`upload_url` 的 `{?name,label}`、`body` 的 markdown 都会截断命令，**静默失败**）。JSON 写独立文件，用 `--data-binary @file`。
 - 发布/上传/删除/**部署**这类外部副作用，**汇报前必须读回真值**，不能凭脚本"没报错"就宣布完成。
