@@ -72,6 +72,13 @@ internal sealed class AppSettings
     public string MusicCapsulePinnedSource { get; set; } = "";
     public int MusicCapsuleWidth { get; set; } = 250;
     public bool MusicCapsuleShowControls { get; set; } = true;
+    /// <summary>
+    /// 用户自备的歌词字体文件（.ttf / .otf / .ttc），空表示用系统默认字体。
+    /// 不内置字体文件：MiSans 这类好看的可变字体动辄 10MB 以上，
+    /// 而且许可往往不是能随本程序分发的（MiSans 就不适用 MIT），
+    /// 由用户自行导入既避开体积也避开授权问题。
+    /// </summary>
+    public string MusicCapsuleLyricFontPath { get; set; } = "";
 
     // ===== 硬件监控浮岛 =====
     public bool SystemMonitorEnabled { get; set; } = true;
@@ -185,6 +192,10 @@ internal sealed class AppSettings
         MusicCapsuleWidth = Math.Clamp(MusicCapsuleWidth, 200, 520);
         MusicCapsuleWhitelist ??= "";
         MusicCapsulePinnedSource ??= "";
+        // 字体文件可能被用户删掉/挪走，这里只做「路径存在与否」的轻量校验，
+        // 真正的格式校验留给加载方（GlyphTypeface 对坏文件抛 FileFormatException）。
+        MusicCapsuleLyricFontPath ??= "";
+        MusicCapsuleLyricFontPath = MusicCapsuleLyricFontPath.Trim();
         if (!TryNormalizeTime(LightStartTime, out var lt)) lt = TimeSpan.FromHours(7);
         if (!TryNormalizeTime(DarkStartTime, out var dt)) dt = TimeSpan.FromHours(19);
         LightStartTime = FormatTime(lt);

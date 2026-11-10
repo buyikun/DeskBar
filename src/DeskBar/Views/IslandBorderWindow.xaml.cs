@@ -25,7 +25,6 @@ public partial class IslandBorderWindow : Window
     private double _ly;
     private double _lw;
     private double _lh;
-    private bool _islandStyle;
 
     // 任务栏「不在屏上」必须持续一段时间才 Hide：拖拽托盘图标 / 任务栏重建时
     // 一次瞬时误判就会让描边凭空消失。用时长而非轮数，因为本窗口是 16ms tick。
@@ -159,12 +158,21 @@ public partial class IslandBorderWindow : Window
 
             // 托盘区左缘改用实时值，与音乐胶囊读的是同一份数据 ——
             // 两边各读各的（一个读缓存锚点、一个读扫描结果）就会错位或一边不跟随。
+            // 注意：rtTrayLeft 是原始 TrayNotifyWnd 左坐标，必须减去 BorderEdgePadPx，
+            // 才能与 TaskbarService 算出的 desiredT1 (tLeft - pad) 保持同源对齐，
+            // 确保托盘描边框向左充分外扩，圆弧彻底离开「^」展开箭头高亮块。
             if (_side == Side.Tray &&
                 TaskbarService.TryGetTrayLeftRealtime(out int rtTrayLeft, out _, out _) &&
-                rtTrayLeft > l && rtTrayLeft < r)
+                rtTrayLeft > 0)
             {
-                l = rtTrayLeft;
+                l = rtTrayLeft - ShapeGeometry.BorderEdgePadPx;
             }
+
+            if (l < 0) l = 0;
+
+            int tbRight = TaskbarService.TryGetShellTaskbarRect(out _, out _, out int tbr, out _) ? tbr : int.MaxValue;
+            int maxR = tbRight - ShapeGeometry.BorderInsetPx;
+            if (r > maxR) r = maxR;
 
             // 用户要求「不要把两段合成一个描边整体，各自一个细边框」，
             // 所以胶囊与托盘区各画各的，中间露出的是任务栏自己的底色。
@@ -178,20 +186,26 @@ public partial class IslandBorderWindow : Window
             var dpi = VisualTreeHelper.GetDpi(this);
             double sx = dpi.DpiScaleX <= 0 ? 1.0 : dpi.DpiScaleX;
             double sy = dpi.DpiScaleY <= 0 ? 1.0 : dpi.DpiScaleY;
-            double dipL = l / sx;
-            double dipT = top / sy;
-            double dipW = w / sx;
-            double dipH = height / sy;
 
-            // 浮岛模式下任务栏被裁成「顶角圆润、底边平直」的形状，描边跟着走；
-            // 整条模式下这两块区域没有形状线索，用与监控浮岛一致的四角圆角。
-            bool island = TaskbarService.IsIslandActive;
-            if (island != _islandStyle)
-            {
-                _islandStyle = island;
-                var rad = island ? new CornerRadius(24) : new CornerRadius(24);
-                Edge.CornerRadius = rad;
-            }
+            // 上下各让出 BorderInsetPx：任务栏底边就是屏幕底边，描边框的下半个圆角
+            // 原本被屏幕裁掉，用户看到的是「只剩上角、圈不够大」。
+            // 内缩后四个角完整可见，同时也把「圆角上界」从 48/2 收紧到 (48-4)/2。
+            int inset = ShapeGeometry.BorderInsetPx;
+            int insetH = height - inset * 2;
+            if (insetH < 8) { inset = 0; insetH = height; }
+
+            double dipL = l / sx;
+            double dipT = (top + inset) / sy;
+            double dipW = w / sx;
+            double dipH = insetH / sy;
+
+            // 圆角按实际高度现算，不写死数值（只有方圆角一种形状）。
+            // 必须以内缩后的高度为界，否则弧会越过半高被 WPF 椭圆化。
+            // 注意赋值位置：本窗口 16ms 一次 tick，无条件赋 DP 等于每秒 62 次无谓写入。
+            // 只在与上次不同时才写，与下面的几何短路保持同一套「未变即不动」原则。
+            double radius = ShapeGeometry.BorderRadius(dipH);
+            var wantRadius = new CornerRadius(radius);
+            if (Edge.CornerRadius != wantRadius) Edge.CornerRadius = wantRadius;
 
             if (IsVisible &&
                 Math.Abs(dipL - _lx) < 0.5 && Math.Abs(dipT - _ly) < 0.5 &&

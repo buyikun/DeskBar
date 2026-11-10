@@ -145,6 +145,8 @@ public partial class SettingsWindow : Window
         TxtMusicWhitelist.Text = s.MusicCapsuleWhitelist;
         SldMusicWidth.Value = Math.Clamp(s.MusicCapsuleWidth, 200, 520);
         TxtMusicWidthValue.Text = $"{(int)SldMusicWidth.Value} px";
+        TxtLyricFontPath.Text = s.MusicCapsuleLyricFontPath;
+        UpdateLyricFontStatus();
         ChkSystemMonitor.IsChecked = s.SystemMonitorEnabled;
 
         // 诊断
@@ -465,6 +467,17 @@ public partial class SettingsWindow : Window
         };
 
         Persist();
+
+        // 风格切换必须当场生效、不能等重启：岛模式要重下发挖洞区域，整条模式要撤掉/加上
+        // 浮岛着色，两条路都收口在 ApplyStyle 这条既有通道上。
+        if (App.Settings.TranslucentTaskbar)
+        {
+            try { TaskbarService.ApplyStyle(App.Settings.TaskbarStyle, App.Settings.EffectiveTone); }
+            catch (Exception ex) { Log.Error($"apply taskbar style failed: {ex.Message}"); }
+            // 浮岛的 AllowsTransparency 随风格走（岛=材质 / 整条=真透明），而该属性不能运行时切换，
+            // 所以只能整窗重建，光刷背景不够。
+            ((App)Application.Current).RecreateWidgetWindows();
+        }
         UpdateRuntimeHints();
     }
 
@@ -748,6 +761,91 @@ public partial class SettingsWindow : Window
         Persist();
         UpdateWhitelistStatus();
         UpdateWhitelistChips();
+    }
+
+    // ===================== 歌词字体 =====================
+
+    private void OnPickLyricFont(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择歌词字体文件",
+           // 允许 All 兜底：有些字体扩展名不规范，用户需要能自己挑到
+            Filter = "字体文件|*.ttf;*.otf;*.ttc|所有文件|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+
+        // 从上次选的目录开始，省得每次都从头翻
+        var current = App.Settings.MusicCapsuleLyricFontPath;
+        if (!string.IsNullOrWhiteSpace(current))
+        {
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(current);
+                if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir))
+                    dialog.InitialDirectory = dir;
+            }
+            catch { }
+        }
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        // 先清缓存再赋值，保证换了文件一定重新解析
+        LyricFont.Invalidate();
+        App.Settings.MusicCapsuleLyricFontPath = dialog.FileName;
+        TxtLyricFontPath.Text = dialog.FileName;
+        Persist();
+        UpdateLyricFontStatus();
+        ApplyLyricFontPreview();
+    }
+
+    private void OnClearLyricFont(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        if (string.IsNullOrWhiteSpace(App.Settings.MusicCapsuleLyricFontPath)) return;
+
+        LyricFont.Invalidate();
+        App.Settings.MusicCapsuleLyricFontPath = "";
+        TxtLyricFontPath.Text = "";
+        Persist();
+        UpdateLyricFontStatus();
+        ApplyLyricFontPreview();
+    }
+
+    /// <summary>把「当前配置能否用」直接显示在设置页，避免用户选了坏文件却不知道为什么没变化。</summary>
+    private void UpdateLyricFontStatus()
+    {
+        var path = App.Settings.MusicCapsuleLyricFontPath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            TxtLyricFontStatus.Text = "当前使用系统默认字体。";
+            TxtLyricFontStatus.Foreground = (System.Windows.Media.Brush)FindResource("SubTextBrush");
+            return;
+        }
+
+        // 这里会真正尝试解析一次（结果被 LyricFont 内部缓存，不会每次重复读盘）
+        var family = LyricFont.FromFile(path, out var error);
+        if (family is null)
+        {
+            TxtLyricFontStatus.Text = $"无法使用：{error}（已回退系统默认字体）";
+            // 失败用强调色标出来；主题里没有专门的危险色，AccentBrush 在两套配色下都够醒目
+            TxtLyricFontStatus.Foreground = (System.Windows.Media.Brush)FindResource("AccentBrush");
+        }
+        else
+        {
+            TxtLyricFontStatus.Text = $"已启用：{family.Source}（换文件后重新打开 DeskBar 生效）";
+            TxtLyricFontStatus.Foreground = (System.Windows.Media.Brush)FindResource("SubTextBrush");
+        }
+    }
+
+    /// <summary>让改动立刻反映到胶囊，不必等重启（WPF 字体缓存只影响「同路径换内容」这种情形）。</summary>
+    private void ApplyLyricFontPreview()
+    {
+        try { (Application.Current as App)?.RefreshWidgetBackgrounds(); }
+        catch (Exception ex) { Services.Log.Debug($"lyric font preview refresh failed: {ex.Message}"); }
     }
 
     // ===================== 播放器白名单 =====================

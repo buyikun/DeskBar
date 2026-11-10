@@ -509,11 +509,13 @@ internal static class TaskbarService
                 tRight = trayW;
             }
 
-            int pad = 5;
+            // 端点留白统一走 ShapeGeometry：按钮高亮块在 44px 描边窗里距顶仅 2px，
+            // 那正是圆弧内缩最大的位置，必须让出这一截弧线才不会压住图标上下角。
+            int pad = ShapeGeometry.BorderEdgePadPx;
             int desiredC1 = Math.Max(0, cLeft - pad);
             int desiredC2 = Math.Min(trayW, cRight + pad);
-            int desiredT1 = Math.Max(0, tLeft - 6);
-            int desiredT2 = Math.Min(trayW, tRight - 4);
+            int desiredT1 = Math.Max(0, tLeft - pad);
+            int desiredT2 = Math.Min(trayW - ShapeGeometry.BorderInsetPx, tRight + pad);
 
             lock (_animLock)
             {
@@ -688,9 +690,12 @@ internal static class TaskbarService
         9, 7, 5, 4, 3, 2, 2, 1, 1, 0
     };
 
+    /// <summary>顶角内缩曲线（只有方圆角一种：胶囊圆档于 2026-11-11 按用户要求删除）。</summary>
+    private static int[] CurrentCornerOffsets => SmoothCornerOffsets;
+
     private static IntPtr CreateSmoothTopRoundedRgn(int x1, int y1, int x2, int y2)
     {
-        var offsets = SmoothCornerOffsets;
+        var offsets = CurrentCornerOffsets;
         int r = offsets.Length;
         int rectCount = r + (y2 > y1 + r ? 1 : 0);
 

@@ -77,10 +77,26 @@ function Get-ToneContract {
     $path = Join-Path $Root 'src/DeskBar/Services/AppSettings.cs'
     if (-not (Test-Path $path)) { return @() }
     $text = Get-Content -Path $path -Raw -Encoding UTF8
-    $m = [regex]::Match($text, 'IsKnownTone[^{]*\{(?<body>.*?)\n\s*\}', 'Singleline')
-    if (-not $m.Success) { return @() }
+    # Anchor on the DEFINITION, not the first textual mention. The old pattern
+    # ('IsKnownTone[^{]*\{...') started at the call site (AcrylicTone = IsKnownTone(tone) ? ...)
+    # and ran forward to the next '{', which is the ShapeStyle switch - so it reported shape
+    # keys as tones and every real tone as removed. Locate the declaration first, then
+    # bracket-match its body.
+    $defIdx = $text.IndexOf('public static bool IsKnownTone')
+    if ($defIdx -lt 0) { return @() }
+    $openIdx = $text.IndexOf('{', $defIdx)
+    if ($openIdx -lt 0) { return @() }
+    $depth = 0
+    $endIdx = -1
+    for ($i = $openIdx; $i -lt $text.Length; $i++) {
+        $ch = $text[$i]
+        if ($ch -eq '{') { $depth++ }
+        elseif ($ch -eq '}') { $depth--; if ($depth -eq 0) { $endIdx = $i; break } }
+    }
+    if ($endIdx -lt 0) { return @() }
+    $body = $text.Substring($openIdx + 1, $endIdx - $openIdx - 1)
     $keys = New-Object System.Collections.ArrayList
-    foreach ($k in [regex]::Matches($m.Groups['body'].Value, '"([a-z]+)"')) {
+    foreach ($k in [regex]::Matches($body, '"([a-z]+)"')) {
         $v = $k.Groups[1].Value
         if (-not $keys.Contains($v)) { [void]$keys.Add($v) }
     }

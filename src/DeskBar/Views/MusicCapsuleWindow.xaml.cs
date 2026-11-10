@@ -18,7 +18,12 @@ namespace DeskBar.Views;
 /// </summary>
 public partial class MusicCapsuleWindow : Window
 {
-    private const int GapToTrayPx = 14;
+    /// <summary>
+    /// 音乐胶囊右边缘距离托盘左边缘（TrayNotifyWnd）的距离。
+    /// 托盘描边框向左外扩了 BorderEdgePadPx (16px)，为保证胶囊与托盘描边框之间
+    /// 留出 10px 干净舒适的呼吸间隙，这里取外扩留白 + 10px。
+    /// </summary>
+    private static int GapToTrayPx => ShapeGeometry.BorderEdgePadPx + 10;
 
     private readonly AppSettings _settings;
     private MediaSessionService? _service;
@@ -57,12 +62,32 @@ public partial class MusicCapsuleWindow : Window
     /// <summary>逐字测宽缓存：字符 → 像素宽度（照 WaterSprite 的 Map 缓存做法）。</summary>
     private readonly Dictionary<char, double> _charWidthCache = new();
 
+    /// <summary>XAML 里给歌词两层声明的默认字体，用户没导入字体时用它回退。</summary>
+    /// <remarks>
+    /// 写全限定名：本文件只 using 了 System.Windows.Media.Animation，
+    /// 而项目同时开了 UseWindowsForms，System.Drawing 里也有 FontFamily 同名类型，
+    /// 加 using System.Windows.Media 会和别处的 Media 类型命名产生歧义风险，
+    /// 只为一个类型引入整段命名空间不值得。
+    /// </remarks>
+    private System.Windows.Media.FontFamily? _defaultLyricFont;
+
+    /// <summary>歌名行在 XAML 里没有显式 FontFamily（继承窗口默认），单独记一份用于回退。</summary>
+    private System.Windows.Media.FontFamily? _defaultTitleFont;
+
     internal MusicCapsuleWindow(AppSettings settings)
     {
         _settings = settings;
         InitializeComponent();
 
+        // 同 SystemMonitorCapsuleWindow：整条模式必须真透明、岛模式必须能叠 accent 材质，
+        // 二者互斥且不能运行时切换，所以按 TaskbarStyle 定，切风格时整窗重建。
+        AllowsTransparency = !AcrylicWindowHelper.IsIslandStyle();
+
         Title = "DeskBarMusicCapsule";
+
+        // 记住 XAML 里声明的默认字体，用户清空自备字体时回退到它们
+        _defaultLyricFont = TxtArtist.FontFamily;
+        _defaultTitleFont = TxtTitle.FontFamily;
 
         BtnPrev.Click += async (_, _) => { if (_service != null) await _service.SkipPreviousAsync(); };
         BtnPlay.Click += async (_, _) => { if (_service != null) await _service.TogglePlayPauseAsync(); };
@@ -117,6 +142,14 @@ public partial class MusicCapsuleWindow : Window
             _service.MediaInfoChanged += OnMediaInfoChanged;
             _service.LyricUpdated += OnLyricUpdated;
             _service.LyricTick += OnLyricTick;
+
+            // RecreateWidgetWindows 会先 new 新窗口、再回到 SyncMusicCapsule 调本方法，
+            // 此时服务里多半已有当前曲目，但事件只为「变化」而发，不会补发既有状态。
+            // 不主动拉一次，_current 就一直是 null，RefreshFromSettings 会把窗口 Hide 掉、再也不显示。
+            if (_service.CurrentInfo is MediaTrackInfo snapshot)
+            {
+                OnMediaInfoChanged(snapshot);
+            }
         }
         else
         {
@@ -132,8 +165,17 @@ public partial class MusicCapsuleWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
 
-        AcrylicWindowHelper.EnableRoundedCorners(this);
+        // 圆角必须两处同值、同心：DWM 的 DWMWCP_ROUND（8px @100%，会随 DPI 缩放）
+        // 负责裁掉 accent / 亚克力材质 —— 材质铺满整个窗口矩形，SetWindowRgn 裁不动它（实测无效）；
+        // XAML 的 CornerRadius 负责画那圈 1px 描边。所以 XAML 里必须是 CornerRadius=8。
+        // 仅岛模式需要：整条模式（acrylic / clear）浮岛是真透明窗口、没有材质要裁。
+        if (AcrylicWindowHelper.IsIslandStyle())
+        {
+            AcrylicWindowHelper.EnableRoundedCorners(this);
+        }
         AcrylicWindowHelper.RemoveWindowBorder(this);
+        // 亚克力材质铺满整个窗口矩形，WPF 的 CornerRadius 只画描边、裁不掉材质 ——
+        // 不裁的话四角就是「圆角线 + 方角底色」（2026-11-11 用户截图报的「有角」）。
         AcrylicWindowHelper.MakeNoActivate(this);
 
         var src = HwndSource.FromHwnd(hwnd);
@@ -532,11 +574,53 @@ public partial class MusicCapsuleWindow : Window
         ApplyTone();
     }
 
+    // alpha=1 而不是 Transparent(alpha=0)：整条模式下本窗口是分层窗口(AllowsTransparency=True)，
+    // 完全透明的像素不参与鼠标命中，框内空白区会整块漏给下面的任务栏（右键直接弹任务栏菜单）。
+    // 这一层肉眼不可见，只为让整个框都吃鼠标事件 —— 监控浮岛根 Border 的 #01000000 是同一个用意。
+    private static readonly System.Windows.Media.SolidColorBrush HitTestBackdrop = CreateHitTestBackdrop();
+
+    private static System.Windows.Media.SolidColorBrush CreateHitTestBackdrop()
+    {
+        var brush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(1, 0, 0, 0));
+        brush.Freeze();
+        return brush;
+    }
+
     private void ApplyTone()
     {
-        RootBorder.Background = System.Windows.Media.Brushes.Transparent;
+        RootBorder.Background = HitTestBackdrop;
         ApplyToneBorder();
+        ApplyLyricFont();
         ApplyAccent();
+    }
+
+    /// <summary>
+    /// 套用用户自备的字体。没配就是系统默认（XAML 里的 FontFamilyBase / 窗口继承字体）。
+    /// 加载器自带按路径缓存，所以这里每次 tone 刷新都调用也不会重复读盘。
+    /// </summary>
+    private void ApplyLyricFont()
+    {
+        try
+        {
+            var family = LyricFont.FromFile(_settings.MusicCapsuleLyricFontPath, out _);
+
+            // 歌名行、歌词两层、回落显示的歌手名，全部跟随自备字体。
+            // 设置页只说「歌词字体」，但用户看到的是一整块文字，
+            // 只换其中两行会显得割裂（2026-11-10 用户要求标题也一起换）。
+            TxtTitle.FontFamily = family ?? _defaultTitleFont;
+            TxtArtist.FontFamily = family ?? _defaultLyricFont;
+            TxtLyricPlayed.FontFamily = family ?? _defaultLyricFont;
+
+            // 换字体后字符宽度全变，必须让逐字高亮与滚动重新测量
+            _charWidths = null;
+            _charWidthCache.Clear();
+            _scrollTarget = 0;
+            _scrollRendered = 0;
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Debug($"ApplyLyricFont failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -552,8 +636,8 @@ public partial class MusicCapsuleWindow : Window
             Resources["CapsuleBorderBrush"] = TonePalette.BorderBrush(tone);
             Resources["CapsuleHoverBrush"] = TonePalette.HoverBrush(tone);
             Resources["CapsulePressedBrush"] = TonePalette.PressedBrush(tone);
-            // 前景必须与底色同向：light / softmist 下任务栏是浅色，
-            // 白字对比度不足 2:1（WCAG AA 要 4.5:1），这里整批换成深色系。
+            // 前景必须与底色同向：softmist 恒浅色底，light 跟随系统深浅，
+            // 一律由 IsDark(tone) 判定，这里整批按深/浅档下发，避免浅底浅字。
             Resources["CapsuleTextBrush"] = TonePalette.CapsuleTextBrush(tone);
             Resources["CapsuleTextMutedBrush"] = TonePalette.CapsuleTextMutedBrush(tone);
             Resources["CapsuleTextFaintBrush"] = TonePalette.CapsuleTextFaintBrush(tone);
@@ -577,14 +661,25 @@ public partial class MusicCapsuleWindow : Window
         try { DwmSetWindowAttribute(hwnd, 38, ref backdropNone, sizeof(int)); } catch { }
 
         var tone = (_settings.EffectiveTone ?? "natural").ToLowerInvariant();
-        uint gradient = NativeTaskbarAppearanceService.GetColorForTone(tone);
+        // 与 AcrylicWindowHelper 同一套分档：只有岛模式需要自带色调材质，
+        // 整条模式去掉着色，避免浮岛比任务栏深一块。
+        var style = (_settings.TaskbarStyle ?? "island_acrylic").ToLowerInvariant();
+        uint gradient = style == "island_acrylic" ? NativeTaskbarAppearanceService.GetColorForTone(tone) : 0u;
+
+        // 整条模式（acrylic / clear）：本窗口按 AllowsTransparency=True 建，靠 WPF 真透明，
+        // 绝不能再叠 accent —— accent 会给客户区糊上一层去掉不掉的磨砂（2026-11-11 实测）。
+        if (style != "island_acrylic")
+        {
+            Services.Log.Debug($"capsule accent style={style} transparent-skip");
+            return;
+        }
 
         RootBorder.BorderThickness = new System.Windows.Thickness(1);
         
         // 此处调用与 AcrylicWindowHelper 保持一致逻辑，保持浮岛磨砂质感
         var accent = new AccentPolicy
         {
-            AccentState = TaskbarService.IsIslandActive ? 4 : 0,
+            AccentState = 4,   // 见 AcrylicWindowHelper：0 会让浮岛变成纯黑板
             AccentFlags = 0,
             GradientColor = gradient,
             AnimationId = 0
@@ -602,8 +697,7 @@ public partial class MusicCapsuleWindow : Window
                 SizeOfData = size
             };
             int ok = SetWindowCompositionAttribute(hwnd, ref data);
-            bool ownSurface = TaskbarService.IsIslandActive;
-            Services.Log.Debug($"capsule accent mode={(ownSurface ? "island-acrylic" : "flat-on-taskbar")} style={_settings.TaskbarStyle} tone={tone} color=0x{gradient:X8} ok={ok}");
+            Services.Log.Debug($"capsule accent style={style} tone={tone} color=0x{gradient:X8} ok={ok}");
         }
         catch (Exception ex)
         {

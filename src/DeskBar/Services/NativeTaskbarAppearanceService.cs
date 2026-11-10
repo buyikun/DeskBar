@@ -312,9 +312,15 @@ public static class NativeTaskbarAppearanceService
                 _service.SetTaskbarBorderVisibility(taskbar, true);
             }
         }
-        catch (COMException)
+        catch (Exception ex) when (ex is COMException or InvalidCastException)
         {
-            // 如果 Explorer 发生过重启导致 COM 断开，重置服务引用以便下次自动重连自愈
+            // 如果 Explorer 发生过重启导致 COM 断开，重置服务引用以便下次自动重连自愈。
+            // 必须同时捕获 InvalidCastException：explorer 重启后 QueryInterface 抛的是
+            // 「Unable to cast COM object … RPC 服务器不可用 (0x800706BA)」，它是
+            // InvalidCastException 而非 COMException 的子类。只捕获 COMException 时
+            // 这条会落到下面的通用 catch，_service 永不置空，EnsureInitialized() 的
+            // `if (_service != null) return true;` 就永久短路 —— 自愈彻底失效，
+            // 必须重启 DeskBar 才能恢复（2026-11-10 实测：错误每 3 秒一条、从不恢复）。
             lock (_lock)
             {
                 _service = null;
@@ -332,11 +338,15 @@ public static class NativeTaskbarAppearanceService
         {
             "softmist" => 0x25525252, // 浅色：柔雾 (减少白色覆盖)
             "sheertights" => 0x25323232, // 深色：黑丝 (沉稳透感)
-            // 白玉磨砂：原先 0xA0FFFFFF（63% 纯白）在亮壁纸上合成接近 #F3F3F3，
-            // 整条任务栏像一块发光的白板；暗壁纸上又成了 #ABABAB 的灰白带，都刺眼。
-            // 改成 55% 暖米白：亮壁纸合成 #E5E3DF（亮度 -14%），暗壁纸 #8E8C87，
-            // 深字对比度仍 ≥5.1:1（WCAG AA 4.5:1），保留「白/奶白」语义但不再抢眼。
-            "light" => 0x8CEAE6DE,    // 白玉磨砂毛玻璃（暖米白薄磨砂）
+            // 白玉磨砂：任务栏字形颜色不归 DeskBar 管 —— ITaskbarAppearanceService 只有
+            // 背景 brush / blur / border 三类方法，没有任何前景色入口，所以「白字压白底」
+            // 只能靠底色避让。WCAG 反解：白字要 4.5:1 需底色相对亮度 <=0.1833（灰阶 <=#777777），
+            // 而任何浅色底不论 alpha 多低，在亮壁纸下都 >=#D0D0D0，白字恒 <1.6:1 —— 降 alpha 修不好。
+            // 2026-11-11 用户要求固定走浅色档（原为「系统浅色 55% 暖米白 / 系统深色 72% 暖墨」两支）：
+            // 统一 55% 暖米白，亮壁纸合成 #E5E3DF，配浅色档深字 5.32:1。
+            // ⚠️ 已知取舍：本机 SystemUsesLightTheme=0，Explorer 恒下发白字，压在浅米白上恒 <1.6:1，
+            //    深色系统下这一档会看不清 —— 这是用户明确接受的结果，不要"顺手修好"成按深浅分两支。
+            "light" => 0x8CEAE6DEu,
             "dark" => 0x90202020,     // 黑曜石磨砂毛玻璃
             "natural" => 0x00000000,  // 图中原味透出壁纸
             // 注意加 u 后缀：0xA0FFFFFF 这类高位字面量是 uint，而 0x25525252 是 int，

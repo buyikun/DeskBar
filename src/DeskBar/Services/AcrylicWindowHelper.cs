@@ -11,7 +11,19 @@ namespace DeskBar.Services;
 /// </summary>
 internal static class AcrylicWindowHelper
 {
-    public static void Apply(Window window, string? tone, string logTag, bool flat = false, int blur = 18)
+    /// <summary>
+    /// 当前任务栏风格是不是「岛」档 —— 只有这一档浮岛悬在壁纸上方、必须自己带材质。
+    /// 整条模式（acrylic / clear）下浮岛靠 AllowsTransparency=True 的 WPF 真透明，
+    /// 不能再叠 accent：那层磨砂无论 alpha 多低都去不掉。
+    /// </summary>
+    internal static bool IsIslandStyle()
+        => (App.Settings?.TaskbarStyle ?? "island_acrylic").ToLowerInvariant() == "island_acrylic";
+
+    /// <param name="forceMaterial">
+    /// 整条模式下是否仍然强上材质。只给「点开才出现的浮层面板」（进程详情窗）用：
+    /// 它不是贴在任务栏上的常驻浮岛，真透明会让文字压在壁纸上看不清。
+    /// </param>
+    public static void Apply(Window window, string? tone, string logTag, int blur = 18, bool forceMaterial = false)
     {
         var hwnd = new WindowInteropHelper(window).Handle;
         if (hwnd == IntPtr.Zero) return;
@@ -21,17 +33,31 @@ internal static class AcrylicWindowHelper
         int backdropNone = 1;   // DWMSBT_NONE
         try { DwmSetWindowAttribute(hwnd, 38, ref backdropNone, sizeof(int)); } catch { }
 
-        // 与任务栏共用同一套色调常量，保证两处色调永远同步
+        // 与任务栏共用同一套色调常量，保证两处色调永远同步。
+        // 但只有浮岛模式（island_acrylic）才带着色：那个模式下任务栏被挖了洞、浮岛悬在
+        // 壁纸上方，必须自带磨砂。整条模式（acrylic / clear）里浮岛就盖在任务栏自己的底上，
+        // 再叠同色会双重着色、比任务栏深一块。
         var t = (tone ?? "natural").ToLowerInvariant();
-        uint gradient = NativeTaskbarAppearanceService.GetColorForTone(t);
+        var style = (App.Settings?.TaskbarStyle ?? "island_acrylic").ToLowerInvariant();
+        uint gradient = style == "island_acrylic" ? NativeTaskbarAppearanceService.GetColorForTone(t) : 0u;
+
+        // 整条模式（acrylic / clear）下浮岛窗口按 AllowsTransparency=True 建，靠 WPF 真透明即可，
+        // 绝不能在这里再叠 accent —— accent 会给客户区重新糊上一层不透明磨砂，
+        // 即使 GradientColor 的 alpha 为 0 也去不掉那层模糊（2026-11-11 实测）。
+        if (!forceMaterial && style != "island_acrylic")
+        {
+            Log.Debug($"{logTag} accent style={style} transparent-skip");
+            return;
+        }
 
         var accent = new AccentPolicy
         {
-            // 整条模式（全透明 / 全亚克力）下浮岛就盖在任务栏自己的底上，
-            // 再糊一层亚克力会与任务栏材质对不上；只有浮岛模式里它悬在壁纸上方，才需要自带磨砂。
-            AccentState = flat ? 0 : 4,   // 0 = ACCENT_DISABLED / 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND
+            // 恒为 4，绝不能退到 0（ACCENT_DISABLED）：两个浮岛窗口 AllowsTransparency=False，
+            // WPF 画不出真透明，禁用 accent 后只剩 DWM 延伸框架的黑色底 ——
+            // 实测整条模式下浮岛会烧成一块纯黑板。
+            AccentState = 4,   // ACCENT_ENABLE_ACRYLICBLURBEHIND
             AccentFlags = 0,     // 必须为 0，否则叠加降亮涂层
-            GradientColor = flat ? 0u : gradient,
+            GradientColor = gradient,
             AnimationId = 0
         };
 
@@ -50,7 +76,7 @@ internal static class AcrylicWindowHelper
                 SizeOfData = size
             };
             int ok = SetWindowCompositionAttribute(hwnd, ref data);
-            Log.Debug($"{logTag} accent mode={(flat ? "flat-on-taskbar" : "island-acrylic")} tone={t} color=0x{gradient:X8} ok={ok}");
+            Log.Debug($"{logTag} accent style={style} tone={t} color=0x{gradient:X8} ok={ok}");
         }
         catch (Exception ex)
         {

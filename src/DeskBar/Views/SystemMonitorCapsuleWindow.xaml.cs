@@ -42,6 +42,12 @@ public partial class SystemMonitorCapsuleWindow : Window
     {
         _settings = settings;
         InitializeComponent();
+
+        // AllowsTransparency 只能在建 HWND 之前设定、且不能运行时切换：
+        // 岛模式要 accent 亚克力材质（layered 窗口上 accent 会让窗口整块画不出来），
+        // 整条模式要 WPF 真透明（accent 那层模糊去不掉）。所以它随 TaskbarStyle 决定，
+        // 切风格时由 App.RecreateWidgetWindows() 整窗重建。
+        AllowsTransparency = !AcrylicWindowHelper.IsIslandStyle();
         Title = "DeskBarSystemMonitor";
         SourceInitialized += OnSourceInitialized;
         RootBorder.MouseLeftButtonUp += (_, _) => ToggleDetailWindow();
@@ -95,9 +101,9 @@ public partial class SystemMonitorCapsuleWindow : Window
     internal void RefreshBackground()
     {
         ApplyToneBorder();
-        // 只有浮岛模式（部分亚克力）里浮岛悬在壁纸上方，才需要自带磨砂；
-        // 整条模式下它直接盖在任务栏自己的底上，保证与音乐胶囊、任务栏材质一致。
-        AcrylicWindowHelper.Apply(this, _settings.EffectiveTone, "monitor", !TaskbarService.IsIslandActive, _settings.TaskbarBlurAmount);
+        // 浮岛的着色强度交给 AcrylicWindowHelper 按当前 TaskbarStyle 自己分档：
+        // 岛模式自带磨砂，整条模式只用透明磨砂，保证与音乐胶囊、任务栏材质一致。
+        AcrylicWindowHelper.Apply(this, _settings.EffectiveTone, "monitor", _settings.TaskbarBlurAmount);
     }
 
     /// <summary>描边色跟随 tone：浅色柔雾压暗边、深色黑丝提亮边。</summary>
@@ -107,16 +113,26 @@ public partial class SystemMonitorCapsuleWindow : Window
         {
             var tone = _settings.EffectiveTone;
             Resources["CapsuleBorderBrush"] = TonePalette.BorderBrush(tone);
-            // 前景必须与底色同向：light / softmist 下任务栏是浅色，
-            // 白字对比度不足 2:1（WCAG AA 要 4.5:1），这里整批换成深色系。
-            Resources["CapsuleTextBrush"] = TonePalette.CapsuleTextBrush(tone);
-            Resources["CapsuleTextMutedBrush"] = TonePalette.CapsuleTextMutedBrush(tone);
-            Resources["CapsuleTrackBrush"] = TonePalette.CapsuleTrackBrush(tone);
+            // 监控浮岛的前景恒为白色（与系统托盘时钟一致），不跟 tone 判深浅。
+            // 原因：softmist / sheertights 只有 15% 覆盖，浮岛底色 85% 由壁纸决定，
+            // 暗壁纸下合成底色实测 #404038（深灰）—— 深字压上去只有 1.45:1，看不见。
+            // 白字在同一个底色上是 10.46:1，且与系统时钟、任务栏图标同色系。
+            Resources["CapsuleTextBrush"] = FrozenWhite(0xFF);
+            Resources["CapsuleTextMutedBrush"] = FrozenWhite(0x99);
+            Resources["CapsuleTrackBrush"] = FrozenWhite(0x33);
         }
         catch (Exception ex)
         {
             Services.Log.Debug($"monitor capsule border apply failed: {ex.Message}");
         }
+    }
+
+    /// <summary>白色画刷（冻结，可跨线程安全复用），只按需造三个 alpha 档。</summary>
+    private static SolidColorBrush FrozenWhite(byte alpha)
+    {
+        var brush = new SolidColorBrush(Color.FromArgb(alpha, 0xFF, 0xFF, 0xFF));
+        brush.Freeze();
+        return brush;
     }
 
     // ---------------- 数据刷新 ----------------
@@ -318,7 +334,7 @@ public partial class SystemMonitorCapsuleWindow : Window
         double dpi = scale <= 0 ? 1.0 : scale / 96.0;
 
         int h = (int)Math.Round(ActualHeight * dpi);
-        if (h <= 0) h = (int)Math.Round(48 * dpi);
+        if (h <= 0) h = (int)Math.Round(44 * dpi);
         if (tbHeight > 0 && h > tbHeight) h = tbHeight;
 
         int x = tbLeft + GapToTaskbarEdgePx;
@@ -379,6 +395,8 @@ public partial class SystemMonitorCapsuleWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
 
+        // 亚克力材质铺满整个窗口矩形，WPF 的 CornerRadius 只画描边、裁不掉材质 ——
+        // 不裁的话四角就是「圆角线 + 方角底色」（2026-11-11 用户截图报的「有角」）。
         try
         {
             var src = HwndSource.FromHwnd(hwnd);
@@ -389,7 +407,14 @@ public partial class SystemMonitorCapsuleWindow : Window
         }
         catch { }
 
-        AcrylicWindowHelper.EnableRoundedCorners(this);
+        // 圆角必须两处同值、同心：DWM 的 DWMWCP_ROUND（8px @100%，会随 DPI 缩放）
+        // 负责裁掉 accent / 亚克力材质 —— 材质铺满整个窗口矩形，SetWindowRgn 裁不动它（实测无效）；
+        // XAML 的 CornerRadius 负责画那圈 1px 描边。所以 XAML 里必须是 CornerRadius=8。
+        // 仅岛模式需要：整条模式（acrylic / clear）浮岛是真透明窗口、没有材质要裁。
+        if (AcrylicWindowHelper.IsIslandStyle())
+        {
+            AcrylicWindowHelper.EnableRoundedCorners(this);
+        }
         AcrylicWindowHelper.RemoveWindowBorder(this);
         AcrylicWindowHelper.MakeNoActivate(this);
         RefreshBackground();
@@ -422,7 +447,7 @@ public partial class SystemMonitorCapsuleWindow : Window
         double leftDip = _lastX / dpi;
         double topDip = _lastY / dpi;
         double widthDip = ActualWidth > 0 ? ActualWidth : 160;
-        double heightDip = ActualHeight > 0 ? ActualHeight : 48;
+        double heightDip = ActualHeight > 0 ? ActualHeight : 44;
 
         var rect = new Rect(leftDip, topDip, widthDip, heightDip);
         _detailWindow.ShowAtCapsule(rect);

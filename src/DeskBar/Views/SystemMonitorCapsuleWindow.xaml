@@ -11,7 +11,7 @@
         Topmost="False"
         ResizeMode="NoResize"
         SizeToContent="Width"
-        Height="48"
+        Height="44"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Ideal"
@@ -19,12 +19,17 @@
 
     <Window.Resources>
         <!-- 描边色按 tone 下发：浅色柔雾走黑色系压边，深色黑丝走白色系提边。
-             默认值只是首帧占位，代码在 RefreshBackground 里会覆盖。 -->
+             默认值只是首帧占位，代码在 RefreshBackground 里会覆盖。
+             前景/轨道同理 —— 缺了默认值首帧会回落到 WPF 默认黑字，
+             在深色任务栏上一闪而过。默认值统一取深色系，与本机默认观感一致。 -->
         <SolidColorBrush x:Key="CapsuleBorderBrush" Color="#38000000"/>
+        <SolidColorBrush x:Key="CapsuleTextBrush" Color="#FFEDEAE5"/>
+        <SolidColorBrush x:Key="CapsuleTextMutedBrush" Color="#99FFFFFF"/>
+        <SolidColorBrush x:Key="CapsuleTrackBrush" Color="#33FFFFFF"/>
     </Window.Resources>
 
     <Border x:Name="RootBorder"
-            CornerRadius="9"
+            CornerRadius="8"
             Background="#01000000"
             BorderBrush="{DynamicResource CapsuleBorderBrush}"
             BorderThickness="1"

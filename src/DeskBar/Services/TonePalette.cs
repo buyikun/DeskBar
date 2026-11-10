@@ -19,7 +19,7 @@ namespace DeskBar.Services;
 /// </summary>
 internal static class TonePalette
 {
-    /// <summary>该 tone 是否属于「深色底」（黑丝系）。natural / auto / 未知值跟随系统主题。</summary>
+    /// <summary>该 tone 是否属于「深色底」（黑丝系）。natural / auto / light 跟随系统主题。</summary>
     public static bool IsDark(string? tone)
     {
         var t = (tone ?? "natural").ToLowerInvariant();
@@ -28,6 +28,8 @@ internal static class TonePalette
             "sheertights" => true,
             "dark" => true,
             "softmist" => false,
+            // light 自 2026-11-11 固定为浅色档（55% 暖米白），不再跟随系统深浅，故恒为 false；
+            // 仍必须与 GetColorForTone 同源，否则会出现浅底浅字。
             "light" => false,
             // natural 是透出壁纸，实际底色取决于系统模式；auto 本身就是跟随系统。
             _ => !NativeTaskbarAppearanceService.IsSystemInLightTheme(),
@@ -217,16 +219,27 @@ internal static class TonePalette
             IsDark(tone) ? Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1A, 0x00, 0x00, 0x00));
 
     // ---------------- 浮岛胶囊：前景 / 交互色 ----------------
-    // 系统监控浮岛与音乐胶囊直接贴在任务栏上，底色随 tone 变化 —— light / softmist
-    // 下任务栏是浅色（light 现为 55% 暖米白 #EAE6DE，早期曾是 63% 纯白），白字对比度
-    // 不足 2:1，远低于 WCAG AA 的 4.5:1。所以前景和描边一样不能写死在 XAML 里。
+    // 系统监控浮岛与音乐胶囊直接贴在任务栏上，底色随 tone 变化 —— softmist 与 light 恒为浅色底；
+    // light 自 2026-11-11 起固定 55% 暖米白 0x8CEAE6DE（不再跟随系统深浅）。
+    // 前景一律跟着 IsDark(tone) 走，两侧始终同向，才不会出现浅底浅字或深底深字。
+    // 所以前景和描边一样不能写死在 XAML 里。
     // 取值与详情面板同一套明暗档位，但键名独立：胶囊背后是任务栏，
     // 面板背后是自带 PanelColor，任一侧将来单独调色都不会牵连另一边。
 
     /// <summary>胶囊主文字：指标数值、已唱歌词、进度条填充（按钮常态前景另有入口）。</summary>
+    /// <remarks>
+    /// 不用纯黑纯白：歌词是 15pt 大字，压在胶囊底上时纯白会"发光"、纯黑会"砸下去"，
+    /// 用户实测反馈"歌词白色太白、黑色太黑"。深色档取暖白 #EDEAE5（与 light 音色的
+    /// 暖米白同一色温），浅色档取炭灰 #262626。
+    /// 两个值都由 WCAG AA（4.5:1）反推、并保留"最不利壁纸"余量：
+    /// 深色档原先在 0xB82A2C28（light 旧深色支，2026-11-11 已废）上、深/中/亮三档壁纸实测 12.33 / 8.29 / 5.19:1；
+    /// 浅色档在 0x8CEAE6DE 上为 4.52 / 7.64 / 12.38:1 —— 最差仍有 4.52:1。
+    /// 浅色档不能更浅：试过 #333333，亮底好看但深壁纸下只有 3.77:1，是不合格的。
+    /// 用户实测反馈浅色档 #262626 仍偏灰，2026-11-10 加深到 #0A0A0A（近黑）。
+    /// </remarks>
     public static Brush CapsuleTextBrush(string? tone) =>
         Cached($"capsuletxt:{IsDark(tone)}",
-            IsDark(tone) ? Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
+            IsDark(tone) ? Color.FromArgb(0xFF, 0xED, 0xEA, 0xE5) : Color.FromArgb(0xFF, 0x0A, 0x0A, 0x0A));
 
     /// <summary>胶囊次要文字：指标标签、歌名-歌手、未唱歌词、封面占位图标。</summary>
     public static Brush CapsuleTextMutedBrush(string? tone) =>

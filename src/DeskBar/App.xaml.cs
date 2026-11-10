@@ -385,7 +385,6 @@ public partial class App : System.Windows.Application
                 if (_media is null)
                 {
                     _media = new MediaSessionService(_settings);
-                    _capsule?.AttachService(_media);
                     _ = _media.InitializeAsync();
                     Services.Log.Info("music capsule enabled, GSMTC listening started");
                 }
@@ -393,6 +392,11 @@ public partial class App : System.Windows.Application
                 {
                     _ = _media.ReevaluateAsync();
                 }
+
+                // 无条件 attach：RecreateWidgetWindows 会先 new 出新窗口、再回来调本方法，
+                // 那时 _media 早已非 null。若只在「新建」分支里 attach，新窗口永远收不到媒体事件
+                // —— 表现就是「切完任务栏风格，音乐胶囊整个不见了」。
+                _capsule?.AttachService(_media);
             }
             else if (_media is not null)
             {
@@ -432,10 +436,13 @@ public partial class App : System.Windows.Application
                 if (_monitor is null)
                 {
                     _monitor = new SystemMonitorService(1000);
-                    _monitorWindow?.AttachService(_monitor);
                     _monitor.Start();
                     Services.Log.Info("system monitor enabled, sampling started");
                 }
+
+                // 同 SyncMusicCapsule：切风格重建窗口后必须重新 attach，
+                // 否则新窗口没有 MetricsChanged 订阅 —— 表现是「浮岛还在，但数字一片空白」。
+                _monitorWindow?.AttachService(_monitor);
             }
             else if (_monitor is not null)
             {
@@ -575,6 +582,18 @@ public partial class App : System.Windows.Application
 
     private DateTime _lastRecreateTime = DateTime.MinValue;
 
+    /// <summary>
+    /// 主显示器是否处于纵向（竖屏）。DeskBar 的任务栏浮岛全部按横向任务栏设计，
+    /// 竖屏下会出现位置错乱，所以检测到竖屏就主动退出。
+    /// 只读主显示器（SM_CXSCREEN / SM_CYSCREEN），与任务栏几何用的是同一套口径。
+    /// </summary>
+    private static bool IsScreenPortrait()
+    {
+        int w = Interop.NativeMethods.GetSystemMetrics(0);   // SM_CXSCREEN
+        int h = Interop.NativeMethods.GetSystemMetrics(1);   // SM_CYSCREEN
+        return w > 0 && h > 0 && h > w;
+    }
+
     private void StartOwnerGuard()
     {
         // 2秒巡检一次：如果任务栏存在，但任意浮岛被销毁或未绑定，自动触发自愈补绑或重建
@@ -586,6 +605,16 @@ public partial class App : System.Windows.Application
         {
             try
             {
+                // 竖屏（纵向）时 DeskBar 没有意义：任务栏几何与浮岛布局全部按横向设计，
+                // 浮岛会停在错误位置。这里直接退出，不留下错位的浮岛。
+                // 挂在已有的 2 秒巡检上顺带判断，不新开轮询、也不挂 SystemEvents。
+                if (IsScreenPortrait())
+                {
+                    Services.Log.Warn("screen is portrait, shutting down");
+                    Shutdown();
+                    return;
+                }
+
                 var tray = Interop.NativeMethods.FindWindowW("Shell_TrayWnd", null);
                 if (tray == IntPtr.Zero) return;
 

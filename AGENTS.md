@@ -78,19 +78,85 @@
 | 模式 | 行为 |
 | --- | --- |
 | `island_acrylic`（默认） | 用 `CombineRgn`+`SetWindowRgn` 把任务栏挖成悬浮岛；浮岛自带独立亚克力。**前提是 ExplorerTAP 注入成功**，否则自动降级为「只监视几何、不裁任务栏」 |
-| `acrylic` | 整条任务栏毛玻璃；浮岛走 `flat-on-taskbar`（`AccentState=0`），不挖洞、不叠模糊层 |
-| `clear` | 整条完全透明 |
+| `acrylic` | 整条任务栏毛玻璃；浮岛不挖洞、不叠模糊层。**旧说法「浮岛走 `flat-on-taskbar`（`AccentState=0`）」已于 2026-11-11 废弃**，见下方浮岛透明度那条 |
+| `clear` | 整条完全透明（**但浮岛不是**，见下条） |
 
 `island_clear` 已在配置归一化时合并进 `island_acrylic`，UI 早已移除，**`TaskbarService.ApplyStyle` 里那个 `case "island_clear"` 是死分支，不要当作可用模式引用**。
 
+**两条不可违背的设计原则（2026-11-11 用户明确要求，任何外观改动先对照这两条）**：
+1. **任务栏是一个整体，任何部分都不能有割裂感**：浮岛、描边、任务栏本体的材质/透明度/颜色必须读作同一层，不能出现「这里比旁边深一块 / 透一截」。
+2. **浮岛的层面就是任务栏层面**：浮岛不是「盖在任务栏上的另一个东西」，它就是任务栏的一部分 —— 所以它**不给自己定独立材质**，而是让下面的任务栏透上来。
+   - `island_acrylic` 是唯一例外：任务栏被挖洞，浮岛那一块**已经不在任务栏上**（底下是壁纸），所以必须自带 tone 材质（`AcrylicWindowHelper` 里只有 `style == "island_acrylic"` 才下发 `GradientColor`）。
+   - `acrylic` / `clear` 下浮岛**真透明**（跳过 accent + `AllowsTransparency=True`）→ 露出它下面的任务栏本身 → 天然同层同貌。**这是「整条模式跳过 accent」的根据，不要理解成「省掉一层模糊」。**
+   - **两个浮岛的根 Border 都必须铺一层 alpha=1 的 `#01000000`**（监控浮岛写在 `SystemMonitorCapsuleWindow.xaml:33`，音乐胶囊写在 `MusicCapsuleWindow.xaml:84` 并由 `MusicCapsuleWindow.xaml.cs:591` 的 `RootBorder.Background = HitTestBackdrop;` 兜住）。肉眼看不见，**但它决定鼠标能不能点到**：整条模式下浮岛是 `WS_EX_LAYERED` 分层窗口，**alpha=0 的像素不参与命中测试**，`Brushes.Transparent` 会让整块空白区穿透到下面的任务栏（右键弹出的是任务栏菜单）。2026-11-11 用户报「右键音乐组件框内部分会直接穿透到任务栏」就是这么来的。**不要为了「彻底透明」把它改回 `Transparent`。**
+   - 任何「给浮岛单独设一个更好看的底色 / 磨砂度 / 阴影」的改动都违反第 1 条。
+
+- **浮岛在整条模式（`acrylic` / `clear`）下是**真透明**，这是 2026-11-11 实现的行为**：两个浮岛窗口的 `AllowsTransparency` 由 `TaskbarStyle` 决定（`src/DeskBar/Views/SystemMonitorCapsuleWindow.xaml.cs:50`、`src/DeskBar/Views/MusicCapsuleWindow.xaml.cs:84`：`AllowsTransparency = !AcrylicWindowHelper.IsIslandStyle();`）——岛模式 `false`（否则 accent 亚克力材质失效），整条模式 `true`（WPF 真透明）。同时 `src/DeskBar/Services/AcrylicWindowHelper.cs:35-39` 与 `src/DeskBar/Views/MusicCapsuleWindow.xaml.cs` 的 `ApplyAccent` 都在整条模式下**不调 accent 直接返回**（日志打出 `accent style=<style> transparent-skip`）。任务栏之所以能全透明，是因为它是 explorer 自己的窗口被设成全透明，机制与浮岛无关。
+  - **`AllowsTransparency` 不能在运行时切换**，所以切风格必须整窗重建：收口在 `src/DeskBar/Views/SettingsWindow.xaml.cs:480` 的 `RecreateWidgetWindows()`（**不是** `RefreshWidgetBackgrounds()`，后者只刷背景，浮岛会停在旧的分层形态）。实测从改 ComboBox 到新窗口带材质出现约 424ms（日志 `recreating widget windows...` → `widget windows recreated successfully`），进程未重启。
+  - **两条 ctypes 实测教训（别再踩）**：① 对 `AllowsTransparency=True` 的浮岛再叠 accent，窗口会**整块画不出来**（设 `AccentState=4` + `DwmExtendFrameIntoClientArea` 后截图只剩桌面）；② `AllowsTransparency=False` 的窗口，`AccentState` 0/1/2/3/4 **没有一档能真透明** —— 0 与 1 是纯黑板 `(98,98,98)`、2 是偏亮的浅灰蓝雾 `(207,220,230)`、3/4 是暖灰白雾 `(206,196,191)`。
+  - **例外：进程详情窗不透明**。`src/DeskBar/Views/SystemMonitorDetailWindow.xaml.cs:104` 传 `forceMaterial: true` 调 `AcrylicWindowHelper.Apply` —— 它是点开才出现的浮层面板、不是贴在任务栏上的常驻浮岛，真透明会让文字压在壁纸上看不清。`Apply` 的 `forceMaterial` 参数就是为它加的。
+  - **内存不是这次的负担**：2026-11-11 实测 clear + 分层（`AllowsTransparency=True`）在 20–200 秒内于 67.6–96.5MB 之间波动且有周期性压降，岛模式非分层为 74.1–92.1MB，**两档量级相当**；与 §1.4 的 15–30MB 目标有差距是既存状况，与本次改动无关。
+
+- **竖屏（纵向）时自动退出**（2026-11-11 用户要求）：主显示器 `h > w` 就主动 `Shutdown()`。判据是 `src/DeskBar/App.xaml.cs` 的 `private static bool IsScreenPortrait()`（读 `GetSystemMetrics(0/1)`，与任务栏几何是同一套口径），调用点挂在**已有的 `_ownerGuardTimer`（2 秒巡检，`StartOwnerGuard()`）的 Tick 开头** —— **不要为它新开轮询、也不要挂 `SystemEvents.DisplaySettingsChanged`**。理由：桌面浮岛全部按横向任务栏设计，竖屏下会停在错误位置；进程启动时若已是竖屏，也会在下一次 tick（≤2 秒）退出。
+
+### 2.4.1 描边几何（只有方圆角一种，形状设置项已删除）
+
+**2026-11-11 用户要求「删掉边缘形状设置，删掉胶囊圆，默认方圆角」**，于是 `AppSettings.ShapeStyle` 字段、设置页「边缘形状」下拉（`CmbShapeStyle` / `OnShapeStyleChanged` / `TxtShapeDesc`）、`ShapeGeometry.Normalize/Current/IsCircle`、`TaskbarService.CircleCornerOffsets` 全部**已删除**。现在处处只剩方圆角一档。**不要把 circle 档或形状设置项加回来。**
+
+迁移注意：老 `settings.json` 里残留的 `"ShapeStyle": "..."` 会被 `JsonSerializer` 的未知字段策略静默忽略（不报错），下次 `Persist()` 自动消失；不需要写迁移代码。
+
+- **几何唯一出口是 `ShapeGeometry`**（`Services/ShapeGeometry.cs`）。描边圆角、上下内缩、左右留白都从它取，禁止在窗口里重新写死数值 —— 之前 `IslandBorderWindow` 两句 `island ? 24 : 24` 是同一个值，形状切换完全没反应。
+- **组件不跟随任何形状**（2026-11-11 用户明确要求）：两个浮岛的圆角由「DWM 8px + XAML `CornerRadius=8`」决定（见本节末尾那条），与 `ShapeGeometry` 无关。曾有一版把组件也联动（`ShapeGeometry.WidgetRadius` + 两个窗口的 `SizeChanged → ApplyShape()`）；用户要求「组件恢复原样」，已整体移除，**不要加回来**。
+- **`CornerRadius` 不能超过高度一半**：超过之后 WPF 会把角画成 `rx=r`、`ry=高度/2` 的**椭圆弧**（离屏渲染实测；旧说法「双角互削成异形」不准确，实测是椭圆化 + 横线被吃短），视觉上就不再读作圆角。
+- **方圆角半径 = 半高的一半**：`ShapeGeometry.BorderRadius(heightDip)` 返回 `heightDip / 2.0 * 0.5`（H=44 → 11、H=48 → 12）。历史注记：曾经有 `island` / `circle` 双档（circle 取半高 = 完整胶囊），以及更早一版按「横线保留 12px」反解的 `MinStraightLineDip`（常量已不存在）—— **两套都随设置项一起删了，不要复活**。
+- **端点留白必须向外扩**（`BorderEdgePadPx = 16`）：按钮高亮块 40px 高，在 44px 描边窗里距窗顶仅 2px，正是圆弧内缩处；方圆角半径 11 在 dy=2 处内缩约 4.7px，留白 16px 让横线完整越过图标、不卡任何边角。向外扩才不缩短框宽。
+- **托盘侧曾有一个吃留白的 bug**：旧写法 `l = rtTrayLeft` 把 `TaskbarService` 给的留白整个抹掉，窗左缘与「^」按钮左缘完全重合。现为 `l = rtTrayLeft - BorderEdgePadPx`，另加夹取防止托盘框压住音乐胶囊（胶囊右缘 = `trayLeft - 14`，与 `MusicCapsuleWindow.GapToTrayPx` 同源）。
+- **描边窗口与两个浮岛都上下各内缩 `BorderInsetPx = 2`**：任务栏底边就是屏幕底边，四角圆角的下半原本被屏幕裁掉，看起来只剩上角。内缩后四角完整，圆角上界也随之变为 `(高 - 4) / 2`。内缩里的 `height` 是任务栏原始高度，改顺序会让圆角算出越界值。
+  - 描边侧由 `src/DeskBar/Views/IslandBorderWindow.xaml.cs:194` 的 `insetH = height - inset * 2` 现算；浮岛侧是**把窗口高度直接写死成 44**（`src/DeskBar/Views/SystemMonitorCapsuleWindow.xaml:14`、`src/DeskBar/Views/MusicCapsuleWindow.xaml:15`）—— 两个浮岛的定位本来就是垂直居中（`y = tbTop + (tbHeight - h) / 2`，见 `SystemMonitorCapsuleWindow.xaml.cs:342` 与 `MusicCapsuleWindow.xaml.cs:906/912`），高度一改位置自动跟随，**不需要单独挪 `Top`**。
+  - **改 `BorderInsetPx` 必须同步这两个 `Height`（= 48 − 2 × inset）**，否则浮岛重新被屏幕裁掉底角、与描边框错位。
+  - 2026-11-11 实测（`clear`、DPI 100%）：改前描边框 44px / 浮岛 48px，上下边缘各错 2px；改后四个窗口（中间应用区、托盘区、监控浮岛、音乐胶囊）的矩形统一为 y **1394–1438**。
+- **岛模式挖洞的顶角曲线只有一套**（`TaskbarService.SmoothCornerOffsets`，10 行，`CurrentCornerOffsets` 直接返回它）。历史上的 `CircleCornerOffsets`（16 行、更饱满）已随胶囊圆档删除。区域签名 `isig` 因此**不再带形状键**（只剩几何数字），形状切换这个概念已经不存在了。
+- **组件圆角与内边距一律用 XAML 固定值**（两个浮岛都是 `CornerRadius=8`，见本节末尾「两处同值、同心」那条；`Padding` 监控 `10,0`、音乐 `8,0`）。注意组件的 `8` **不是** `ShapeGeometry.BorderRadius` 算出来的 `11` —— 它必须等于 DWM `DWMWCP_ROUND` 的 8px 才能同心，改任一处都要同步另一处。历史注记：曾有一版按「内容顶边处的弧线内缩量」动态推开内边距 —— `dy = rIn - (高-内容高)/2`、`rIn = r - 1px边框`、封面尺寸读 `BorderCover.Height`，并由 `SizeChanged → ApplyShape()` 在运行时重算（构造期 `ActualHeight=0`，需回落 XAML 的 `Height`）；已随组件联动一起删除。**若将来重新给组件上大圆角，这段避让算法是必需的**，否则方角封面会被弧线切到。
+- **浮岛圆角必须「两处同值、同心」—— DWM 的 8px 与 XAML 的 `CornerRadius=8`**（2026-11-11 反复踩过，这里记最终解法）：
+  - **accent / 亚克力材质铺满整个窗口矩形，且是 DWM 合成的 —— `SetWindowRgn` 裁不动它。** 实测：`GetWindowRgn` 返回 `COMPLEXREGION`（区域确实设上了）、`SetWindowRgn` 返回 1（成功）、外层再加 `Loaded` 兜时序，但截图里材质四角**依然是直角**。所以「用 `SetWindowRgn` 把窗口裁圆」这条路对带 accent 的窗口是无效的，不要再试（对照脚本 `.scratch/probe_corner_methods.py`）。
+  - **唯一能裁掉那层材质的是 DWM 自己的圆角**：`AcrylicWindowHelper.EnableRoundedCorners(this)`（`DWMWA_WINDOW_CORNER_PREFERENCE = 33` 设 `DWMWCP_ROUND = 2`）。实测其半径是 **8px @100% DPI**，且随 DPI 缩放。
+  - 因此两个浮岛窗口都**必须调它**，并且 **XAML 的 `CornerRadius` 必须写成同一个数 `8`**，描边线才会与材质边缘同心。作用是「谁裁材质、谁画描边」分工：**DWM 裁材质，XAML `CornerRadius` 画描边**。
+  - **只在岛模式调**：`if (AcrylicWindowHelper.IsIslandStyle())` —— 整条模式（`acrylic` / `clear`）浮岛是真透明窗口（`AllowsTransparency=True`）、没有 accent 材质要裁，对分层窗口设 DWM 圆角还可能让它画不出来（见 §2.4 的两条 ctypes 教训）。
+  - 三种状态实测对照（`island_acrylic`，`SystemMonitorCapsuleWindow`）：① **不调 DWM 圆角** = 方角材质 + 圆角描边线（用户报「谁会希望有一个角的？既然是圆就不要有角啊」）；② **DWM 圆角 8px + XAML `CornerRadius=11`** = 材质与描边**不同心**、四角留一条孤立弧线（用户报「边角不太对」）；③ **DWM 圆角 8px + XAML `CornerRadius=8`** = 同心、四角干净 ← **正解**。改任一处都必须同步另一处。
+  - `SettingsWindow` 与 `SystemMonitorDetailWindow` 也在 `OnSourceInitialized` 里调了它（普通窗口、没有圆角 Border，取系统标准圆角）—— 那两处是既有的，不要删。
+
 ### 2.5 音色（tone）与昼夜方案
 - 合法 tone 只有 5 个：`light`、`dark`、`natural`、`softmist`、`sheertights`（见 `AppSettings.IsKnownTone`）。
-- 深浅判定：`sheertights` / `dark` = 深色底；`softmist` / `light` = 浅色底；`natural` = 跟随系统。
+- 深浅判定：`sheertights` / `dark` = 深色底；`softmist` = 浅色底；`natural` = 跟随系统；`light` = 固定浅色底（2026-11-11 起不再跟随系统，见下条）。
 - 任务栏着色：`softmist=0x25525252`、`sheertights=0x25323232`、`light=0x8CEAE6DE`、`dark=0x90202020`、`natural=0x00000000`。
-  - `light` 旧值 `0xA0FFFFFF`（63% 纯白）已废：亮壁纸合成后近 `#F3F3F3`、暗壁纸成 `#ABABAB`，整条任务栏像发光白板，用户实测报「刺眼突兀」。现为 **55% 暖米白 `#EAE6DE`**，亮壁纸合成 `#E5E3DF`（亮度降 14%），深字对比度仍 ≥5.1:1。
-  - 改 `light` 的 alpha/底色，必须同时改这 **5 处**：`GetColorForTone` 定义、`SettingsWindow.xaml:607/:798/:853` 三处下拉文案的「55% 覆盖」、`AGENTS.md` 本行。色块 ToolTip 是代码算的（`SettingsWindow.xaml.cs:266-267`），不用手改。
+  - **`softmist` / `sheertights` 的 15% 是用户选定的外观，不要为了提高文字对比度擅自调高**（2026-11-10 试过 45% / 68%，用户明确要求改回）。这两档 alpha 只有 14.5%，壁纸占 85%，因此 `IsDark` 的明暗假设一旦与壁纸相反，字就会看不清 —— 实测暗壁纸下 `softmist` 合成 `#35352E`、配浅色档深字 `#262626` 只有 **1.23:1**。这是**已知取舍**：调高 alpha 能修好文字，但会把「柔雾 / 黑丝」变成近乎实心的板子，属于产品外观决策，交用户定。
+  - WaterSprite-TaskbarMediaBar（MIT）的同类做法是 `源代码/soda-player/src/Widget.vue:47` `.container{background:light-dark(rgb(255 255 255 / 32%),rgb(32 32 32 / 60%))}`，且它的 `Widget.vue:48` 停靠态是 `background:transparent`、全仓也没有壁纸自适应（`luminance|getpixel|blit` 零命中）。**它并没有解决低 alpha + 反色壁纸这个组合**，别把它当现成答案。
+  - **任务栏字形颜色不归 DeskBar 管**：`ITaskbarAppearanceService`（`NativeTaskbarAppearanceService.cs:18-40`）只有背景 brush/blur/border 三类方法，没有任何前景色入口，Explorer 按系统深浅自己下发字色（本机 `SystemUsesLightTheme=0` 时恒为白字）。所以「白字压白底」只能靠底色避让。实测：把 `SystemUsesLightTheme` 与 `AppsUseLightTheme` 都设为 1 并重启 explorer，在 `ColorPrevalence=2` 的机器上任务栏仍是深底白字，此路不通。
+  - WCAG 反解：白字要 4.5:1，底色相对亮度须 ≤0.1833（灰阶 ≤`#777777`）；任何浅色底不论 alpha 多低，亮壁纸下都 ≥`#D0D0D0`，白字恒 <1.6:1 —— **降 alpha 修不好白字可读性**。
+  - `light` 的历史形状：最早是**按系统深浅分两支**（系统浅色 55% 暖米白 `0x8CEAE6DE` / 系统深色 72% 暖墨 `0xB82A2C28`）；**2026-11-11 用户要求「只留一个浅」后改成固定 55% 暖米白 `0x8CEAE6DE`**，`0xB82A2C28` 已从 `GetColorForTone` 移除（只在 `TonePalette.cs` 注释里留作历史）。更早的 `0xA0FFFFFF`（63% 纯白）已废，用户报「刺眼白板」。
+  - **`light` 现在固定浅色底，所以深色系统下必然「白字压浅底」**：本机 `SystemUsesLightTheme=0`，Explorer 恒下发白字，压在 `0x8CEAE6DE` 的合成色上远低于 4.5:1。这是**用户明确选择并接受的取舍**（2026-11-11），**不要替用户改回「按系统深浅分两支」**。
+  - **`TonePalette.IsDark` 必须与 `GetColorForTone` 同源**：`light` 自 2026-11-11 起固定浅色底，IsDark 恒为 `false`；两项必须同步改，否则会出现浅底浅字。
+  - 改 `light` 的颜色值，必须同时改这 **7 处**：① `GetColorForTone` 定义（`NativeTaskbarAppearanceService.cs` 里 `"light" =>` 那一行）；② `TonePalette.IsDark` 的 `"light"` 判定；③ `SettingsWindow.xaml` 三处 `Tag="light"` 下拉项文案（含「xx% 覆盖」）；④ `TonePalette.cs` 里 `CapsuleTextBrush` 的 `<remarks>` 四组对比度数字（改色后全部失效）；⑤ 本节「深浅判定」与「任务栏着色」两行；⑥ 本节 `light` 的历史与取舍子条；⑦ §2.6 胶囊前景的对比度数字。**色块 ToolTip 不用手改** —— `SettingsWindow.xaml.cs:266-267` 由 `color.A` 现算，`ToneDisplayName` 只提供短名、不含颜色值。
 - **渲染路径一律读 `App.Settings.EffectiveTone`，禁止直接读 `AcrylicTone`**。自动主题按时段把结果写进 `RuntimeTone`（`[JsonIgnore]`，不落盘），`EffectiveTone => RuntimeTone ?? AcrylicTone`。读错会让描边比底色慢一拍。
 - 昼夜方案是显式字段（`DayThemeLight`/`NightAcrylicTone` 等），不再是「读系统深浅色反推」。
+
+### 2.6 浮岛胶囊的前景（`TonePalette.Capsule*`）
+胶囊贴在任务栏上，底色随 tone 变，所以**前景不能在 XAML 里写死** —— 一律 `{DynamicResource CapsuleXxxBrush}`，由各窗口 `ApplyToneBorder()` 按 `EffectiveTone` 下发。共 8 个令牌：`CapsuleTextBrush`（主文字：指标数值、已唱歌词、进度条填充）、`CapsuleTextMutedBrush`（标签、歌名-歌手、**未唱歌词层 `TxtArtist`**）、`CapsuleTextFaintBrush`（禁用按钮）、`CapsuleButtonForegroundBrush`、`CapsuleHoverForegroundBrush`、`CapsuleTrackBrush`（进度条轨道）、`CapsuleCoverBackBrush`（无封面占位）、`CapsuleControlsMaskBrush`（控制区渐变，唯一的非纯色，自己 `lock` + `Freeze`）。
+
+- **新窗口用这些键时，`<Window.Resources>` 里必须补默认值**（每个键一条 `<SolidColorBrush>`）。漏了首帧会回落 WPF 默认黑字，在深色任务栏上一闪而过。`SystemMonitorCapsuleWindow.xaml` 曾漏过 3 个。
+- **主文字不用纯黑纯白**（2026-11-10 用户实测「歌词白色太白、黑色太黑」）：深色档 `#EDEAE5` 暖白、浅色档 `#0A0A0A` 近黑（原 `#262626` 炭灰，2026-11-10 同日加深）。两个值都由 WCAG AA 反推并留最不利壁纸余量 —— 深色档原先在 `0xB82A2C28`（light 旧深色支，已废）上三档壁纸 12.33 / 8.29 / 5.19:1；浅色档在 `0x8CEAE6DE` 上 4.52 / 7.64 / 12.38:1。
+- **浅色档不能再浅**：试过 `#333333`，亮底好看但深壁纸下只有 3.77:1，不合格。想更柔和就必须放弃 AA，那是另一个决策。
+- `CapsuleTextMutedBrush` 是 `#99` 半透明，最不利情况 3.4–3.5:1（低于 AA）—— 这是**有意为之**：它只承载标签/未唱层，靠比主文字弱来表达层级；不要为了凑 4.5:1 把它提到和主文字一样亮，那会让逐字高亮失去对比。
+
+### 2.7 歌词字体（用户自备，`LyricFont.cs`）
+**程序不内置任何字体文件。** 好看的歌词字体（MiSans 等可变字体）单文件 10MB+，且许可常不允许随第三方程序分发（MiSans 明确「不适用本项目 MIT」，见 WaterSprite 的 `THIRD_PARTY_NOTICES.md:10-15`）。所以做成 `AppSettings.MusicCapsuleLyricFontPath` + 设置页「选择…」，由用户导入 `.ttf/.otf/.ttc`。
+
+- **族名必须从文件里读**（`GlyphTypeface(uri).FamilyNames`，优先 `en-US`），**不许用文件名推**：用户会把 `simsun.ttc` 改名成「我的歌词字体.otf」。拿到族名后用 `new FontFamily(uri, "./#" + familyName)` 构造，再用 `Typeface.TryGetGlyphTypeface` 回验一次。
+- **实测边界（`.scratch/fonttest/Probe*.cs`，别重新踩）**：① 目标字重在文件里不存在时 WPF 自动挑最接近的（SimSun 只有 Normal/Bold，请求 `SemiBold` 解析成 `Bold`），不抛异常也不难看；② 族名写错不抛异常，只是 `TryGetGlyphTypeface` 返回 false、静默退默认字体；③ 选到非字体文件抛 `FileFormatException`（用来给用户报错），所以 `LyricFont` 里必须单独 catch 它；④ 加载后 WPF 占用句柄（`FileShare.None` 打开会 IOException），但**改名/替换仍成功** —— 换字体不必退出程序；⑤ 同一路径换内容受 WPF 字体缓存影响，**要重开 DeskBar 才生效**，设置页提示语按这个写。
+- **失败结果也要缓存**（`LyricFont._cachedPath` / `_cachedError`），否则每次 `ApplyToneBorder`（tone 刷新会调）都会重读一次坏文件。
+- 换字体后**必须清 `_charWidths` 与 `_charWidthCache`**，否则逐字高亮的像素宽度还是旧字体的，整行会错位。
+- 字体**只作用于歌词两层**（`TxtArtist` / `TxtLyricPlayed`），`TxtTitle` 保持界面字体 —— 用户导入装饰字体不该把曲目名也变样。
+- **不给 `MusicCapsuleWindow` 加 `using System.Windows.Media`**：项目同时开 `UseWindowsForms`，`System.Drawing` 里有同名 `FontFamily`；字段写全限定名 `System.Windows.Media.FontFamily` 即可（该文件原本只 using 了 Media.Animation）。`LyricFont.cs` 内部可以正常 using，但**必须同时 using `System.Windows`**，否则 `FontStyles` / `FontWeights` / `FontStretches` 全找不到（已踩）。
 
 ---
 
@@ -131,8 +197,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:/ai/deskbar/sync-frontend.
 # 闪烁检测：抓 50 帧只测描边区域灰度，避开文字刷新造成的假阳性（无基线阈值，只能靠改动前后对比）
 & $PY scripts/flick7.py mon|tray
 # 任务栏截图：-Out 是必填参数，漏了报 MissingMandatoryParameter；默认抓屏幕底部 160px
+# 2560x1440 屏幕抓 0,1280 → 图高 160，屏幕 y = 图 y + 1280（写像素探针时必须换算）
 powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scratch/verify/taskbar.png
 ```
+
+**验证设置项要会唤起设置窗**：它是 `Hide()` 关掉的常驻窗口，进程里一直存在但不可见。用 `.scratch/wake.py`（`OpenEventW(EVENT_MODIFY_STATE=0x0002, False, "Local\DeskBar_WakeEvent")` + `SetEvent`）唤起，再用 `windows_computer_use_list_windows` 拿 hwnd/pid。**控件 id 形如 `uia:rt:7-<pid>-<n>`，带 pid，重启 DeskBar 后全部失效**，必须重新 `accessibility_tree` 取。
+- WPF `ComboBox` **不能用 `click` 展开**（实测时开时收，不可靠）——必须用 `windows_computer_use_invoke` 的 `action: "expand"`；下拉项在弹出的独立 Popup 里，要在 `scope: "desktop"` 里 `find`，再用 `invoke`（method: SelectionItem）选中。
 
 ### 测试现状（别高估）
 - **没有单元测试框架**（无 xunit / MSTest / NUnit），没有 CI，没有断言式测试。
@@ -170,10 +240,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scrat
 - 描边窗口必须在 `SourceInitialized` 里附加 `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` 实现点击穿透；首帧先放到 `-32000` 算好几何再显示，避免闪一下。
 
 ### 4.4 外观引擎与降级
-- **描边色由 `TonePalette` 按 tone 下发，不在 XAML 里写死**：深色底 `0x40FFFFFF`、浅色底 `0x33000000`，都是 1px（`BorderThickness="1"`）。旧文档所说的「统一 `#38000000`、统一 `CornerRadius=9`」**已过时**——实际圆角按组件各不相同（监控浮岛 `9`、音乐胶囊 `10`、描边层 `24`），改动前先看对应 XAML。
+- **描边色由 `TonePalette` 按 tone 下发，不在 XAML 里写死**：深色底 `0x40FFFFFF`、浅色底 `0x33000000`，都是 1px（`BorderThickness="1"`）。旧文档所说的「统一 `#38000000`、统一 `CornerRadius=9`」**已过时**——两个浮岛的圆角都是 `8`（固定在各自 XAML 里，必须等于 DWM `DWMWCP_ROUND` 的 8px，见 §2.4.1 末尾）；描边层圆角**不写在 XAML**，由 `ShapeGeometry.BorderRadius` 按实际高度实时下发（只有方圆角一档，见 §2.4.1）。
 - 各窗口必须在 `OnSourceInitialized` 里调 `AcrylicWindowHelper.RemoveWindowBorder(this)`（`DWMWA_BORDER_COLOR(34)`），否则 DWM 会额外叠一圈 1px 高光边框。
 - **注入失败与管理员权限无关**。Explorer 与 DeskBar 同为 Medium 完整性级别，同级注入本就允许。**「必须管理员权限才能接管任务栏外观」是被本机实测证伪的历史断言**（日志里 `elevated=False` 但注入成功、`0x80070005` 出现 0 次、计划任务根本不存在）。真实失败原因是 `ExplorerTAP.dll` 缺失、版本不匹配，或 Explorer 正在重启。**任何权限相关文案不要回退到旧说法。**
 - 注入失败后 **30 秒内不再重试**。任务栏几何扫描是 100ms 级循环，每次真去注入会把日志刷爆并拖慢扫描。
+- **explorer 重启后 COM 掉线必须能被自愈**（2026-11-10 踩过，已修）。`RefreshCurrentAppearance` 里 explorer 死亡抛的是 **`InvalidCastException`**（原文 `Unable to cast COM object … QueryInterface … IID '{5BCF9150-…}' … RPC 服务器不可用 (0x800706BA)`），**它不是 `COMException` 的子类**。所以这里必须是 `catch (Exception ex) when (ex is COMException or InvalidCastException)` —— 只 catch `COMException` 会让异常落到下面的通用 catch，`_service` 永不置空，`EnsureInitialized()` 的 `if (_service != null) return true;` 永久短路，重连路径再也不进，**外观彻底失能、只能重启 DeskBar**。现场特征：日志每 3 秒刷一条 `RefreshCurrentAppearance error: … 0x800706BA`、从不恢复。修复后同样实验（kill explorer → WMI 拉起）约 38 秒自动重连并打出 `NativeTaskbarAppearanceService initialized successfully via COM.`，上述错误计数为 0。期间出现的 `InjectExplorerTAP returned 0x800401E3`（CO_E_CLASSSTRING）是 explorer 正重启的瞬时失败，属正常。
+- **本机 kill explorer 不会自动重启**（桌面变黑且不恢复）。必须手动走 WMI 拉起：`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='C:\Windows\explorer.exe'}`（理由同 4.9，`Start-Process` 起的进程挂在宿主 Job Object 上）。
 - `SetTaskbarBlur` 不一定存在（导出集合随版本变化），**必须先探测再用**；调用不存在的导出只返回失败、不抛异常，光看返回值会静默丢失外观。
 - 新增 tone 必须**同时改三处**：`AppSettings.IsKnownTone`、`NativeTaskbarAppearanceService.GetColorForTone`、`TonePalette.IsDark`。漏一处颜色就静默退化。
 - 已知不一致：`GetColorForTone` 保留了 `"auto"` 分支，但 `IsKnownTone` 不含 `auto`。`auto` 只在 `Normalize()` 里被迁移成软雾/黑丝。**不要新增 `auto` 用法**。
@@ -190,6 +262,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scrat
 - 关闭设置窗是 `e.Cancel = true` + `Hide()`，**不是退出进程**。
 
 ### 4.6 媒体与歌词子系统
+- **重建出来的窗口必须主动补拉既有状态 —— 事件只为「变化」而发，不会补发**（2026-11-11 踩过，表现为「切换布局后音乐胶囊没了」）：切任务栏风格走 `RecreateWidgetWindows()`（`App.xaml.cs:539`）整窗重建，但 `SyncMusicCapsule()` / `SyncSystemMonitor()`（`:379` / `:426`）在服务已非 null 时只调 `ReevaluateAsync()`，**不重新 `AttachService`**；而 `MusicCapsuleWindow.OnMediaInfoChanged`（`MusicCapsuleWindow.xaml.cs:195`）是**唯一**给 `_current` 赋值的地方，新窗口的 `_current` 恒为 null → `RefreshFromSettings()`（`:281`）走 `HideCapsule()` 分支 → 窗口永远不显示。修法两半缺一不可：① `AttachService` 在 `_service is not null` 分支末尾用 `if (_service.CurrentInfo is MediaTrackInfo snapshot) OnMediaInfoChanged(snapshot);` 主动补拉（`:149`）；② `App.xaml.cs:399` / `:445` 把 `_capsule?.AttachService(_media)` / `_monitorWindow?.AttachService(_monitor)` 放在 `if (_media is null)` 之外**无条件执行**。监控浮岛没这个坑，因为它的 `RefreshFromSettings()` 只看 `SystemMonitorEnabled`、不依赖数据是否已到。
 - **播放控制只走 GSMTC 的 `TrySkipPreviousAsync` / `TryTogglePlayPauseAsync` / `TrySkipNextAsync`**，不得改成模拟按键或窗口消息。注意：当前 UI **丢弃返回的 bool**，所以「点了没反应」是已知现状，不是回归 bug——别为此加弹出提示，除非用户明确要求。
 - **歌词匹配不得放宽「候选唯一」判据**。歧义时宁可无歌词，也不要串到翻唱/同名版本。
 - **QRC 的 DES 位序与 KRC 的 16 字节常量是格式常量**，换成标准 TripleDES / 标准 XOR 一定解不出。

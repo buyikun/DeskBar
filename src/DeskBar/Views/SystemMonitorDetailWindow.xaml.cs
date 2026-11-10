@@ -99,7 +99,9 @@ public partial class SystemMonitorDetailWindow : Window
         catch { }
 
         // 与任务栏同源的亚克力材质（AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND）
-        AcrylicWindowHelper.Apply(this, _settings.EffectiveTone, "monitor-detail", flat: false);
+        // 详情面板是点开才出现的浮层，不是贴在任务栏上的常驻浮岛：整条模式下也要保留材质，
+        // 否则非分层窗口的客户区会塌成 DWM 的黑底，比带材质更难看。
+        AcrylicWindowHelper.Apply(this, _settings.EffectiveTone, "monitor-detail", forceMaterial: true);
     }
 
     public void UpdateMetrics(SystemMetrics m)

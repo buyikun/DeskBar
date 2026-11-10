@@ -604,7 +604,7 @@
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" IsSelected="True" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
                                     <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" />
-                                    <ComboBoxItem Content="白玉磨砂 · 暖米白薄磨砂（55% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="白玉磨砂 · 暖米白（55% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
                                 <Border x:Name="ToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
@@ -795,7 +795,7 @@
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" IsSelected="True" />
                                     <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" />
-                                    <ComboBoxItem Content="白玉磨砂 · 暖米白薄磨砂（55% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="白玉磨砂 · 暖米白（55% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
                                 <Border x:Name="DayToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
@@ -850,7 +850,7 @@
                                     <ComboBoxItem Content="原味自然 · 完全透出壁纸（0% 覆盖）" Tag="natural" />
                                     <ComboBoxItem Content="柔雾 · 浅灰薄雾（15% 覆盖）" Tag="softmist" />
                                     <ComboBoxItem Content="黑丝 · 深灰薄纱（15% 覆盖）" Tag="sheertights" IsSelected="True" />
-                                    <ComboBoxItem Content="白玉磨砂 · 暖米白薄磨砂（55% 覆盖）" Tag="light" />
+                                    <ComboBoxItem Content="白玉磨砂 · 暖米白（55% 覆盖）" Tag="light" />
                                     <ComboBoxItem Content="黑曜石 · 石墨厚磨砂（56% 覆盖）" Tag="dark" />
                                 </ComboBox>
                                 <Border x:Name="NightToneSwatch" Grid.Column="2" Style="{StaticResource ToneSwatch}"
@@ -997,6 +997,34 @@
                                                Foreground="{DynamicResource SubTextBrush}" />
                                 </StackPanel>
                             </Grid>
+
+                            <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,10" />
+
+                            <StackPanel>
+                                <TextBlock Text="歌词字体" Style="{StaticResource RowTitle}" />
+                                <TextBlock Style="{StaticResource RowDesc}"
+                                           Text="可选。导入系统里没装的 .ttf / .otf / .ttc 字体文件，用于胶囊里的歌名、歌手与歌词文字（设置窗口等界面字体不受影响）。留空则用系统默认字体。字体文件由你自备——程序不内置字体，避免体积和授权问题；换文件后需重新打开 DeskBar 才完全生效。" />
+                                <Grid Margin="0,9,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="TxtLyricFontPath" Grid.Column="0"
+                                             Style="{StaticResource ModernText}"
+                                             IsReadOnly="True"
+                                             ToolTip="点右侧「选择…」挑一个字体文件" />
+                                    <Button x:Name="BtnPickLyricFont" Grid.Column="1" Content="选择…"
+                                            Style="{StaticResource ModernButton}"
+                                            MinWidth="76" Margin="8,0,0,0"
+                                            Click="OnPickLyricFont" />
+                                    <Button x:Name="BtnClearLyricFont" Grid.Column="2" Content="清除"
+                                            Style="{StaticResource ModernButton}"
+                                            MinWidth="64" Margin="8,0,0,0"
+                                            Click="OnClearLyricFont" />
+                                </Grid>
+                                <TextBlock x:Name="TxtLyricFontStatus" Style="{StaticResource Hint}" />
+                            </StackPanel>
 
                             <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,0,0,10" />
 

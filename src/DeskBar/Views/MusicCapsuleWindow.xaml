@@ -12,7 +12,7 @@
         ResizeMode="NoResize"
         SizeToContent="Manual"
         Width="250"
-        Height="48"
+        Height="44"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Ideal"
@@ -26,10 +26,11 @@
         <SolidColorBrush x:Key="CapsuleHoverBrush" Color="#33FFFFFF"/>
         <SolidColorBrush x:Key="CapsulePressedBrush" Color="#55FFFFFF"/>
 
-        <!-- 前景同样按 tone 下发。胶囊贴在任务栏上，light / softmist 下任务栏是浅色，
-             白字对比度不足 2:1（WCAG AA 要 4.5:1）；只有深色黑丝系
-             才是白字。默认值取深色系，与首次 ApplyTone 之前的观感一致。 -->
-        <SolidColorBrush x:Key="CapsuleTextBrush" Color="#FFFFFFFF"/>
+        <!-- 前景同样按 tone 下发。胶囊贴在任务栏上：softmist 恒为浅色底；
+             light 跟随系统深浅（深色系统下是 72% 暖墨深底）；黑丝系恒深底。
+             前景跟着 IsDark(tone) 走，两侧同向才不会出现浅底浅字。
+             默认值取深色系，与首次 ApplyTone 之前的观感一致。 -->
+        <SolidColorBrush x:Key="CapsuleTextBrush" Color="#FFEDEAE5"/>
         <SolidColorBrush x:Key="CapsuleTextMutedBrush" Color="#99FFFFFF"/>
         <SolidColorBrush x:Key="CapsuleTextFaintBrush" Color="#55FFFFFF"/>
         <SolidColorBrush x:Key="CapsuleButtonForegroundBrush" Color="#E6FFFFFF"/>
@@ -79,8 +80,8 @@
     </Window.Resources>
 
     <Border x:Name="RootBorder"
-            CornerRadius="10"
-            Background="#4D000000"
+            CornerRadius="8"
+            Background="#01000000"
             BorderBrush="{DynamicResource CapsuleBorderBrush}"
             BorderThickness="1"
             Padding="8,0">
@@ -140,12 +141,16 @@
                     <Grid x:Name="LyricTrack" HorizontalAlignment="Left">
                         <TextBlock x:Name="TxtArtist"
                                    Text="未知歌手"
+                                   FontFamily="{DynamicResource FontFamilyBase}"
+                                   FontWeight="SemiBold"
                                    FontSize="15"
                                    Foreground="{DynamicResource CapsuleTextMutedBrush}"
                                    HorizontalAlignment="Left"
                                    VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtLyricPlayed"
                                    Text=""
+                                   FontFamily="{DynamicResource FontFamilyBase}"
+                                   FontWeight="SemiBold"
                                    FontSize="15"
                                    Foreground="{DynamicResource CapsuleTextBrush}"
                                    HorizontalAlignment="Left"
