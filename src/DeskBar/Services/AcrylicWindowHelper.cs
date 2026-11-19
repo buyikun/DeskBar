@@ -253,6 +253,8 @@ internal static class AcrylicWindowHelper
             var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
 
+            if (TryYieldToCaptureOverlay(hwnd)) return;
+
             var tray = FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return;
 
@@ -283,6 +285,8 @@ internal static class AcrylicWindowHelper
             var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
 
+            if (TryYieldToCaptureOverlay(hwnd)) return;
+
             var tray = FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return;
 
@@ -302,6 +306,46 @@ internal static class AcrylicWindowHelper
             }
         }
         catch { }
+    }
+
+    private static bool TryYieldToCaptureOverlay(IntPtr hwnd)
+    {
+        IntPtr overlay = FindWindowW("SnipOverlayRootWindow", null);
+        if (overlay == IntPtr.Zero || !IsWindowVisible(overlay)) return false;
+
+        if (!Interop.NativeMethods.GetWindowRect(hwnd, out var windowRect)) return false;
+        if (!Interop.NativeMethods.GetWindowRect(overlay, out var overlayRect) ||
+            !CoversWindow(overlayRect, windowRect)) return false;
+
+        GetWindowThreadProcessId(overlay, out uint overlayProcessId);
+        if (overlayProcessId == 0) return false;
+
+        var owner = GetWindowLongPtr(hwnd, GWLP_HWNDPARENT);
+        if (owner != IntPtr.Zero)
+        {
+            SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, IntPtr.Zero);
+            if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != IntPtr.Zero) return false;
+        }
+
+        // 压暗是遮罩本体（SnipOverlayRootWindow）自己画的一层半透明覆盖，所以只有插到它
+        // 正下方才会跟着一起变暗。早先这里插的是「遮罩组里最高的那个同进程窗口」，
+        // 而那个窗口（XamlWindow）本身就压在遮罩之上 —— 胶囊被插在两者之间，
+        // 依旧浮在压暗层上面，正是「截图时组件浮现、跟任务栏不在同一层」的成因。
+        IntPtr previous = GetWindow(hwnd, GW_HWNDPREV);
+        for (int i = 0; i < 80 && previous != IntPtr.Zero; i++)
+        {
+            if (previous == overlay) return true;
+            previous = GetWindow(previous, GW_HWNDPREV);
+        }
+
+        return SetWindowPos(hwnd, overlay, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+
+    private static bool CoversWindow(Interop.NativeMethods.RECT outer, Interop.NativeMethods.RECT inner)
+    {
+        return outer.left <= inner.left && outer.top <= inner.top &&
+            outer.right >= inner.right && outer.bottom >= inner.bottom;
     }
 
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
