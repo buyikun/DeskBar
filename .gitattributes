@@ -1,0 +1,17 @@
+# 行尾统一为 LF。
+#
+# 背景：本仓没有 .gitattributes 时，行尾取决于编辑工具。2026-11-20 曾因一次编辑
+# 把 MusicCapsuleWindow.xaml.cs 整个翻成 CRLF，16 行的真实修复被埋在 1315 行全文件
+# diff 里；另有多份文件出现「索引 LF / 工作区 CRLF」，下次谁碰谁就重演。
+# git diff --numstat 的增删数等于文件总行数，就是行尾翻转的判据。
+#
+# 注意：`.ps1` 也必须是 LF 且无 BOM —— Windows PowerShell 5.1 对无 BOM 脚本按
+# OEM/ANSI 解码，非 ASCII 字符会直接 ParserError（见 AGENTS.md §4.1）。
+* text=auto eol=lf
+
+# 二进制资源不要做行尾转换
+*.ico binary
+*.png binary
+*.dll binary
+*.exe binary
+*.pdb binary
