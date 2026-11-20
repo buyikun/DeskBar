@@ -1271,10 +1271,26 @@ public partial class MusicCapsuleWindow : Window
         bool gotForeground = Services.PlayerWindowControl.ActivateWindow(capsuleHwnd);
         Services.Log.Debug($"capsule menu opening: hwnd=0x{capsuleHwnd.ToInt64():X} foreground={gotForeground}");
 
+        IntPtr menuHwnd = IntPtr.Zero;
+        IntPtr originalMenuOwner = IntPtr.Zero;
+        menu.PlacementTarget = RootBorder;
+        menu.Opened += (_, _) =>
+        {
+            // ContextMenu 是独立 Popup；只设定位目标并不保证它高于任务栏 owned 组件。
+            // 绑定实际 HWND 的 owner，让系统在组件重排时也保持菜单在组件上方。
+            if (PresentationSource.FromVisual(menu) is HwndSource source)
+            {
+                menuHwnd = source.Handle;
+                originalMenuOwner = GetWindowLongPtr(menuHwnd, -8);
+                SetWindowLongPtr(menuHwnd, -8, capsuleHwnd);
+            }
+        };
         menu.Closed += (_, _) =>
         {
             try
             {
+                if (menuHwnd != IntPtr.Zero)
+                    SetWindowLongPtr(menuHwnd, -8, originalMenuOwner);
                 SetWindowLongPtr(capsuleHwnd, GWL_EXSTYLE, (IntPtr)originalExStyle);
                 // Win32 弹出菜单的标准收尾：投递 WM_NULL，把前台队列交还回去。
                 Interop.NativeMethods.PostMessageW(capsuleHwnd, 0x0000, IntPtr.Zero, IntPtr.Zero);
