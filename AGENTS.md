@@ -182,6 +182,8 @@ cd /d/ai/deskbar && bash deploy.sh
 
 **部署脚本只认 `deploy.sh`**。`deploy.ps1` / `deploy2.ps1` 是历史遗留，行为互不一致（前者不跳过 `ExplorerTAP.dll` 且用 `-ErrorAction Continue` 静默吞掉覆盖失败）。**不要用它们，也不要「顺手统一」**。
 
+`deploy.sh` 自己会 `Stop-Process` 停旧实例（**不要再在调用前手写一遍**），并在两处硬失败：停不干净（残留进程数 ≠ 0）、任一文件复制失败或复制后大小与 `out_publish` 不一致，都直接 `exit 1`。历史坑：旧版用 MSYS 的 `taskkill //F //IM`，在本机被判 `ERROR: Invalid argument/option - '//F'`、一行都不生效，靠调用方预先 Stop-Process 才勉强可用；且 `cp` 失败只打印一行 `FAIL <file>` 就继续，会带着**旧的 `DeskBar.dll`** 启动，表现为「改了却没生效」。所以看到 `FAIL` 字样或没有 `copied=N verified=yes` 都必须当失败处理。
+
 ### 辅助工具
 ```powershell
 # 后端改动后，检查设置 UI 是否需要跟进（只检测、不改源码）
