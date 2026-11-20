@@ -27,6 +27,19 @@ internal sealed class MediaTrackInfo
     public TimeSpan Duration { get; init; } = TimeSpan.Zero;
 }
 
+/// <summary>
+/// 设置页「正在播放」列表用的一项：某个来源的 AppId、它是否正在播放，
+/// 以及它现在是否已被白名单放行。GSMTC 只给会话，不告诉你谁在真的出声，
+/// 所以这里单独取一次 PlaybackInfo。
+/// </summary>
+internal sealed class MediaSourceDetail
+{
+    public string AppId { get; init; } = "";
+    public string FriendlyName { get; init; } = "";
+    public bool IsPlaying { get; init; }
+    public bool IsAllowed { get; init; }
+}
+
 internal sealed class MediaSessionService : IDisposable
 {
     private readonly AppSettings _settings;
@@ -299,6 +312,50 @@ internal sealed class MediaSessionService : IDisposable
     public IReadOnlyList<string> GetRawSources() => CollectSources(applyWhitelist: false);
 
     public IReadOnlyList<string> GetAvailableSources() => CollectSources(applyWhitelist: true);
+
+    /// <summary>
+    /// 带播放状态的来源明细，供设置页「正在播放」区块点选加入白名单。
+    /// 只看系统级排除、不套白名单 —— 被挡在外面的来源恰恰最需要让用户点一下加回来。
+    /// </summary>
+    public IReadOnlyList<MediaSourceDetail> GetRawSourceDetails()
+    {
+        var list = new List<MediaSourceDetail>();
+        if (_sessionManager == null) return list;
+
+        try
+        {
+            var sessions = _sessionManager.GetSessions();
+            if (sessions == null) return list;
+
+            foreach (var s in sessions)
+            {
+                var id = s.SourceAppUserModelId;
+                if (string.IsNullOrEmpty(id)) continue;
+                if (MediaSourceRouter.IsExcluded(id)) continue;
+                if (list.Exists(x => string.Equals(x.AppId, id, StringComparison.OrdinalIgnoreCase))) continue;
+
+                bool playing = false;
+                try
+                {
+                    var pb = s.GetPlaybackInfo();
+                    playing = pb?.PlaybackStatus
+                        == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+                }
+                catch { }
+
+                list.Add(new MediaSourceDetail
+                {
+                    AppId = id,
+                    FriendlyName = GetFriendlySourceName(id),
+                    IsPlaying = playing,
+                    IsAllowed = IsAppAllowed(id)
+                });
+            }
+        }
+        catch { }
+
+        return list;
+    }
 
     private List<string> CollectSources(bool applyWhitelist)
     {

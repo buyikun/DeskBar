@@ -66,6 +66,11 @@ internal sealed class AppSettings
     public bool MusicCapsuleAutoHide { get; set; } = true;
     public string MusicCapsuleWhitelist { get; set; } = ""; // 逗号分隔，空为全部
     /// <summary>
+    /// 设置页「正在播放」区块的显隐开关。它只决定那块列表画不画、刷不刷新，
+    /// 不改变白名单本身的生效范围 —— 关掉之后白名单照样按 MusicCapsuleWhitelist 过滤。
+    /// </summary>
+    public bool MusicCapsuleLiveSourceEnabled { get; set; } = true;
+    /// <summary>
     /// 用户手动固定的媒体来源（AppId）。空表示自动选择。
     /// 以前只存在内存里，重启就丢，用户每次开机都得重新点一遍。
     /// </summary>

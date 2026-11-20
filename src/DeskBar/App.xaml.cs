@@ -375,6 +375,13 @@ public partial class App : System.Windows.Application
     internal IReadOnlyList<string> GetRawMediaSources()
         => _media?.GetRawSources() ?? Array.Empty<string>();
 
+    /// <summary>
+    /// 带播放状态的来源明细，供设置页「正在播放」区块点选加入白名单。
+    /// 胶囊未启用时 _media 为 null，返回空。
+    /// </summary>
+    internal IReadOnlyList<MediaSourceDetail> GetRawMediaSourceDetails()
+        => _media?.GetRawSourceDetails() ?? Array.Empty<MediaSourceDetail>();
+
     /// <summary>按当前设置启停音乐胶囊会话监听（关闭时彻底释放 GSMTC 句柄）。</summary>
     private void SyncMusicCapsule()
     {

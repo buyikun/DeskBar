@@ -19,6 +19,15 @@ public partial class SettingsWindow : Window
     private bool _loading;
     private readonly DispatcherTimer _statusTimer;
 
+    /// <summary>
+    /// 「正在播放」列表的刷新定时器。GSMTC 没有事件能告诉设置页
+    /// 「现在谁开始出声了」，只能轮询；设置窗常驻 Hide，所以按可见性启停，
+    /// 隐藏时一律停掉，避免把 §1.4 的 CPU / 内存预算吃掉。
+    /// </summary>
+    private readonly DispatcherTimer _liveTimer =
+        new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
+    private string _liveSignature = "";
+
     public SettingsWindow()
     {
         _loading = true;
@@ -37,6 +46,41 @@ public partial class SettingsWindow : Window
         };
         _statusTimer.Tick += (_, _) => UpdateThemeStatus();
         _statusTimer.Start();
+
+        // 「正在播放」列表 2 秒扫一次 GSMTC。只在设置窗可见时跑（Show → Start，Hide/Close → Stop）。
+        _liveTimer.Tick += (_, _) => RefreshLiveSources(force: false);
+        IsVisibleChanged += OnSettingsVisibilityChanged;
+    }
+
+    /// <summary>设置窗显示出来就开始扫媒体会话。</summary>
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        UpdateLiveSourceVisibility();
+        RefreshLiveSources(force: true);
+        SyncLiveTimer();
+    }
+
+    /// <summary>显示 / 隐藏时启停「正在播放」轮询。</summary>
+    private void OnSettingsVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        // 重新显示时先立刻扫一次：常驻窗口 Hide 期间定时器是停的，
+        // 不然用户点开设置会先看到几秒前的空列表。
+        if (IsVisible) RefreshLiveSources(force: true);
+        SyncLiveTimer();
+    }
+
+    private void SyncLiveTimer()
+    {
+        bool shouldRun = IsVisible && App.Settings.MusicCapsuleLiveSourceEnabled;
+        if (shouldRun)
+        {
+            if (!_liveTimer.IsEnabled) _liveTimer.Start();
+        }
+        else if (_liveTimer.IsEnabled)
+        {
+            _liveTimer.Stop();
+        }
     }
 
     /// <summary>切换右侧内容页；只显示一个，其余折叠。</summary>
@@ -143,6 +187,7 @@ public partial class SettingsWindow : Window
         ChkMusicAutoHide.IsChecked = s.MusicCapsuleAutoHide;
         ChkMusicControls.IsChecked = s.MusicCapsuleShowControls;
         TxtMusicWhitelist.Text = s.MusicCapsuleWhitelist;
+        ChkLiveSource.IsChecked = s.MusicCapsuleLiveSourceEnabled;
         SldMusicWidth.Value = Math.Clamp(s.MusicCapsuleWidth, 200, 520);
         TxtMusicWidthValue.Text = $"{(int)SldMusicWidth.Value} px";
         TxtLyricFontPath.Text = s.MusicCapsuleLyricFontPath;
@@ -169,6 +214,8 @@ public partial class SettingsWindow : Window
 
         UpdateWhitelistChips();
         UpdateWhitelistStatus();
+        UpdateLiveSourceVisibility();
+        RefreshLiveSources(force: true);
     }
 
     private static void SelectComboByTag(ComboBox combo, string? tag, string fallback)
@@ -969,6 +1016,126 @@ public partial class SettingsWindow : Window
         TxtWhitelistStatus.Style = (Style)FindResource(warn ? "WarnHint" : "Hint");
     }
 
+    // ===================== 正在播放（实时检测） =====================
+
+    /// <summary>开关只管这块列表的显隐与轮询，白名单本身照旧生效。</summary>
+    private void OnLiveSourceEnabledChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        App.Settings.MusicCapsuleLiveSourceEnabled = ChkLiveSource.IsChecked == true;
+        Persist();
+        UpdateLiveSourceVisibility();
+        RefreshLiveSources(force: true);
+        SyncLiveTimer();
+    }
+
+    private void UpdateLiveSourceVisibility()
+    {
+        bool on = ChkLiveSource.IsChecked == true;
+        var visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        PnlLiveSources.Visibility = visibility;
+        TxtLiveSourceEmpty.Visibility = visibility;
+    }
+
+    /// <summary>
+    /// 重建「正在播放」chip 列表。GSMTC 没有「谁开始出声」的事件，只能在这里轮询，
+    /// 所以先算一个签名（AppId + 播放状态 + 是否已放行）挡掉无变化的帧，
+    /// 否则每 2 秒都重建一次 WrapPanel，白白拖动布局与 GC。
+    /// </summary>
+    private void RefreshLiveSources(bool force)
+    {
+        if (ChkLiveSource.IsChecked != true) return;
+        if (!IsVisible) return;
+
+        var app = (App)Application.Current;
+
+        if (!App.Settings.MusicCapsuleEnabled)
+        {
+            PnlLiveSources.Children.Clear();
+            _liveSignature = "";
+            TxtLiveSourceEmpty.Text = "音乐胶囊未启用，暂时检测不到媒体来源。";
+            TxtLiveSourceEmpty.Visibility = Visibility.Visible;
+            return;
+        }
+
+        var details = app.GetRawMediaSourceDetails()
+            .OrderByDescending(x => x.IsPlaying)
+            .ThenBy(x => x.FriendlyName, StringComparer.CurrentCulture)
+            .ToList();
+
+        string signature = string.Join("|", details.Select(x =>
+            $"{x.AppId}:{(x.IsPlaying ? 1 : 0)}:{(x.IsAllowed ? 1 : 0)}"));
+        if (!force && signature == _liveSignature)
+        {
+            // 内容没变，但空态文案可能因为「有没有来源」而变化，一起更新便宜。
+            UpdateLiveSourceEmptyText(details);
+            return;
+        }
+        _liveSignature = signature;
+
+        PnlLiveSources.Children.Clear();
+        foreach (var detail in details)
+        {
+            var chip = new Button
+            {
+                Content = (detail.IsPlaying ? "▶ " : "") + detail.FriendlyName,
+                Tag = detail.AppId,
+                Style = (Style)FindResource(detail.IsAllowed ? "ChipButtonOn" : "ChipButton"),
+                // 暂停中的来源压暗，一眼能看出「它现在没在出声」。
+                Opacity = detail.IsPlaying ? 1.0 : 0.55
+            };
+            ToolTipService.SetToolTip(chip,
+                $"{detail.FriendlyName}\n{detail.AppId}\n" +
+                (detail.IsAllowed ? "已在白名单，点一下移除" : "不在白名单，点一下加入"));
+            chip.Click += OnLiveSourceClick;
+            PnlLiveSources.Children.Add(chip);
+        }
+
+        UpdateLiveSourceEmptyText(details);
+    }
+
+    private void UpdateLiveSourceEmptyText(List<MediaSourceDetail> details)
+    {
+        if (details.Count > 0)
+        {
+            TxtLiveSourceEmpty.Visibility = Visibility.Collapsed;
+            return;
+        }
+        TxtLiveSourceEmpty.Text = "当前没有正在上报的媒体应用。随便打开一个播放器放一下，它就会出现在这里。";
+        TxtLiveSourceEmpty.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// 点一下加入、再点一下移除（与下方「常见播放器」的语义一致）。
+    /// 加入时不是直接写友好名 —— <see cref="MediaWhitelist.BuildEntry"/> 会优先挑一条
+    /// 只命中这个来源的关键字，避免「填 QQ音乐 顺手放行所有含『音乐』的播放器」。
+    /// </summary>
+    private void OnLiveSourceClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string appId }) return;
+        if (string.IsNullOrWhiteSpace(appId)) return;
+
+        var entries = MediaWhitelist.Parse(TxtMusicWhitelist.Text);
+        // 反查已有条目：用户可能手填过 cloudmusic，字符串精确比较找不到它。
+        int index = MediaWhitelist.IndexOfMatch(entries, appId);
+        if (index >= 0)
+        {
+            entries.RemoveAt(index);
+        }
+        else
+        {
+            var known = ((App)Application.Current).GetRawMediaSourceDetails()
+                .Select(x => x.AppId).ToList();
+            var entry = MediaWhitelist.BuildEntry(appId, known);
+            if (entry.Length > 0) entries.Add(entry);
+        }
+
+        // 写回输入框会走 OnMusicWhitelistChanged：落盘、状态文案、预设 chip 全在那儿刷新。
+        TxtMusicWhitelist.Text = string.Join(", ", entries);
+        // 上面那条路径不会重建「正在播放」列表，这里补一次，让高亮立刻跟上。
+        RefreshLiveSources(force: true);
+    }
+
     private void OnSystemMonitorChanged(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -1329,6 +1496,7 @@ public partial class SettingsWindow : Window
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         _statusTimer.Stop();
+        _liveTimer.Stop();
         e.Cancel = true;
         Hide();
         App.TrimMemory();

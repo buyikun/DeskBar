@@ -1039,6 +1039,21 @@
                                 <TextBlock Text="常见播放器（点一下加入，再点一下移除）" Style="{StaticResource Hint}" />
                                 <WrapPanel x:Name="PnlWhitelistPresets" Margin="0,5,0,0" />
                                 <TextBlock x:Name="TxtWhitelistStatus" Style="{StaticResource Hint}" />
+
+                                <Border Height="1" Background="{DynamicResource ControlBorderBrush}" Margin="0,10,0,10" />
+
+                                <DockPanel>
+                                    <CheckBox x:Name="ChkLiveSource" Style="{StaticResource ToggleSwitch}"
+                                              DockPanel.Dock="Right" VerticalAlignment="Center"
+                                              Checked="OnLiveSourceEnabledChanged" Unchecked="OnLiveSourceEnabledChanged" />
+                                    <StackPanel>
+                                        <TextBlock Text="实时媒体检测" Style="{StaticResource RowTitle}" />
+                                        <TextBlock Style="{StaticResource RowDesc}"
+                                                   Text="自动列出系统里正在上报的媒体来源，点一下按它精确加入白名单，再点一下移除。这个开关只控制本列表的显隐与刷新，不影响白名单本身的生效。" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <WrapPanel x:Name="PnlLiveSources" Margin="0,8,0,0" />
+                                <TextBlock x:Name="TxtLiveSourceEmpty" Style="{StaticResource Hint}" />
                             </StackPanel>
                         </StackPanel>
                     </Border>
