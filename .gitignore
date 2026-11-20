@@ -117,9 +117,13 @@ test_zip_extract/
 # scripts/ 与根目录探针是 AGENTS.md 定性的「调试证据链」，默认不入库。
 # 但 winlist.py / flick7.py 是 AGENTS.md §3 列出的辅助工具，用 glob 显式放行
 # （git 不会为「已被忽略的目录」内的子项评估取反规则，所以用 /scripts/* 而非 /scripts/）。
+# check_publish_sync.py 与 verify_overlay_contexts.py 同理：前者核对部署是否真的
+# 落地了最新产物，后者是截图遮罩层级的回归判据，都值得长留。
 /scripts/*
 !/scripts/winlist.py
 !/scripts/flick7.py
+!/scripts/check_publish_sync.py
+!/scripts/verify_overlay_contexts.py
 
 # .agents/skills：只保留本项目相关的 sync-frontend，其余是别的项目的 skill 副本
 /.agents/*
