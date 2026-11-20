@@ -1071,6 +1071,20 @@
                             </StackPanel>
                         </DockPanel>
                     </Border>
+
+                    <TextBlock Text="无线设备电量" Style="{StaticResource GroupTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                            <CheckBox x:Name="ChkWirelessBattery" Style="{StaticResource ToggleSwitch}"
+                                      DockPanel.Dock="Right" VerticalAlignment="Center"
+                                      Checked="OnWirelessBatteryChanged" Unchecked="OnWirelessBatteryChanged" />
+                            <StackPanel>
+                                <TextBlock Text="启用无线设备电量胶囊" Style="{StaticResource RowTitle}" />
+                                <TextBlock Style="{StaticResource RowDesc}"
+                                           Text="在任务栏显示可读取电量的无线设备；部分设备可能不提供电量数据。" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
 

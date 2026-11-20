@@ -193,6 +193,7 @@ public partial class SettingsWindow : Window
         TxtLyricFontPath.Text = s.MusicCapsuleLyricFontPath;
         UpdateLyricFontStatus();
         ChkSystemMonitor.IsChecked = s.SystemMonitorEnabled;
+        ChkWirelessBattery.IsChecked = s.WirelessBatteryEnabled;
 
         // 诊断
         ChkDebugLog.IsChecked = s.EnableDebugLog;
@@ -1140,6 +1141,13 @@ public partial class SettingsWindow : Window
     {
         if (_loading) return;
         App.Settings.SystemMonitorEnabled = ChkSystemMonitor.IsChecked == true;
+        Persist();
+    }
+
+    private void OnWirelessBatteryChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        App.Settings.WirelessBatteryEnabled = ChkWirelessBattery.IsChecked == true;
         Persist();
     }
 

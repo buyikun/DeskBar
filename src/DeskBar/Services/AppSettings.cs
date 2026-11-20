@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -87,6 +89,168 @@ internal sealed class AppSettings
 
     // ===== 硬件监控浮岛 =====
     public bool SystemMonitorEnabled { get; set; } = true;
+    public bool WirelessBatteryEnabled { get; set; } = true;
+    public Dictionary<string, string> WirelessBatteryCustomNames { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> WirelessBatteryDeviceTypes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, WirelessBatteryHistoryEntry> WirelessBatteryHistory { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    [JsonIgnore] private readonly object _wirelessBatteryHistoryLock = new();
+
+    internal IReadOnlyList<WirelessBatteryHistoryEntry> GetWirelessBatteryHistory()
+    {
+        lock (_wirelessBatteryHistoryLock)
+            return WirelessBatteryHistory.Values.Select(entry => entry.Copy()).ToArray();
+    }
+
+    internal IReadOnlyList<WirelessBatteryHistoryEntry> MergeWirelessBatteryHistory(IEnumerable<WirelessBatteryDevice> devices, bool scanComplete)
+    {
+        WirelessBatteryHistoryEntry[] merged;
+        bool shouldSave;
+        lock (_wirelessBatteryHistoryLock)
+        {
+            WirelessBatteryHistory ??= new Dictionary<string, WirelessBatteryHistoryEntry>(StringComparer.OrdinalIgnoreCase);
+            bool changed = false;
+            var presentDevices = new Dictionary<string, WirelessBatteryDevice>(StringComparer.OrdinalIgnoreCase);
+            foreach (var device in devices)
+            {
+                if (string.IsNullOrWhiteSpace(device.Id)) continue;
+                presentDevices[device.Id] = device;
+                WirelessBatteryHistory.TryGetValue(device.Id, out var old);
+                string name = string.IsNullOrWhiteSpace(device.Name) ? old?.Name ?? "无线设备" : device.Name;
+                bool hasCurrentPercent = device.Percent is >= 0 and <= 100;
+                int percent = hasCurrentPercent ? device.Percent : old?.Percent ?? -1;
+                string connection = string.IsNullOrWhiteSpace(device.Connection) ? old?.Connection ?? "无线设备" : device.Connection;
+                bool isConnected = device.IsConnected;
+                bool connectionKnown = device.ConnectionKnown;
+                bool hidden = device.IsHidden || (old?.Hidden ?? false);
+                bool stale = device.IsStale || (!hasCurrentPercent && old?.Percent >= 0);
+                if (old is null)
+                {
+                    WirelessBatteryHistory[device.Id] = new WirelessBatteryHistoryEntry
+                    {
+                        Id = device.Id,
+                        Name = name,
+                        Type = device.Type,
+                        Percent = percent,
+                        Connection = connection,
+                        LastSeenUtc = DateTime.UtcNow,
+                        Hidden = hidden,
+                        IsConnected = isConnected,
+                        ConnectionKnown = connectionKnown,
+                        IsStale = stale
+                    };
+                    changed = true;
+                    continue;
+                }
+
+                bool persistentChanged = old.Name != name || old.Type != device.Type || old.Percent != percent || old.Connection != connection || old.Hidden != hidden;
+                old.IsConnected = isConnected;
+                old.ConnectionKnown = connectionKnown;
+                old.IsStale = stale;
+                if (persistentChanged)
+                {
+                    old.Name = name;
+                    old.Type = device.Type;
+                    old.Percent = percent;
+                    old.Connection = connection;
+                    old.Hidden = hidden;
+                    old.LastSeenUtc = DateTime.UtcNow;
+                    changed = true;
+                }
+            }
+            if (scanComplete)
+            {
+                foreach (var entry in WirelessBatteryHistory.Values)
+                {
+                    bool present = presentDevices.TryGetValue(entry.Id, out var current);
+                    bool connected = present && current!.IsConnected;
+                    bool known = !present || current!.ConnectionKnown;
+                    bool stale = !present || current!.IsStale || (current.Percent is < 0 or > 100 && entry.Percent >= 0);
+                    entry.IsConnected = connected;
+                    entry.ConnectionKnown = known;
+                    entry.IsStale = stale;
+                }
+            }
+            else
+            {
+                foreach (var entry in WirelessBatteryHistory.Values)
+                {
+                    if (presentDevices.TryGetValue(entry.Id, out var current))
+                    {
+                        entry.ConnectionKnown = current.ConnectionKnown;
+                        entry.IsConnected = current.IsConnected;
+                        entry.IsStale = current.IsStale || (current.Percent is < 0 or > 100 && entry.Percent >= 0);
+                    }
+                    else
+                    {
+                        entry.ConnectionKnown = false;
+                        entry.IsStale = entry.Percent >= 0;
+                    }
+                }
+            }
+            merged = WirelessBatteryHistory.Values.Select(entry => entry.Copy()).ToArray();
+            shouldSave = changed;
+        }
+        if (shouldSave) Save();
+        return merged;
+    }
+
+    internal void SetWirelessBatteryHidden(string id, bool hidden)
+    {
+        bool changed = false;
+        lock (_wirelessBatteryHistoryLock)
+        {
+            if (WirelessBatteryHistory.TryGetValue(id, out var entry) && entry.Hidden != hidden)
+            {
+                entry.Hidden = hidden;
+                changed = true;
+            }
+        }
+        if (changed) Save();
+    }
+
+    internal void RemoveWirelessBatteryHistory(string id)
+    {
+        bool changed;
+        lock (_wirelessBatteryHistoryLock)
+        {
+            changed = WirelessBatteryHistory.Remove(id);
+            changed |= WirelessBatteryCustomNames.Remove(id);
+            changed |= WirelessBatteryDeviceTypes.Remove(id);
+        }
+        if (changed) Save();
+    }
+
+    internal string GetWirelessBatteryName(string id, string fallback)
+    {
+        lock (_wirelessBatteryHistoryLock)
+            return WirelessBatteryCustomNames.TryGetValue(id, out var value) && !string.IsNullOrWhiteSpace(value) ? value : fallback;
+    }
+
+    internal string GetWirelessBatteryType(string id, string fallback)
+    {
+        lock (_wirelessBatteryHistoryLock)
+            return WirelessBatteryDeviceTypes.TryGetValue(id, out var value) && IsKnownWirelessBatteryType(value) ? value : fallback;
+    }
+
+    internal void SetWirelessBatteryName(string id, string value)
+    {
+        lock (_wirelessBatteryHistoryLock)
+        {
+            if (string.IsNullOrWhiteSpace(value)) WirelessBatteryCustomNames.Remove(id);
+            else WirelessBatteryCustomNames[id] = value.Trim();
+        }
+    }
+
+    internal void SetWirelessBatteryType(string id, string value)
+    {
+        lock (_wirelessBatteryHistoryLock)
+        {
+            if (!IsKnownWirelessBatteryType(value) || value == "auto") WirelessBatteryDeviceTypes.Remove(id);
+            else WirelessBatteryDeviceTypes[id] = value;
+        }
+    }
+
+    internal static bool IsKnownWirelessBatteryType(string? value) => value is "auto" or "headset" or "keyboard" or "mouse" or "controller" or "other";
 
     // ===== 更新 =====
     /// <summary>启动后是否自动检查一次更新（默认关闭，避免无谓的网络请求）。</summary>
@@ -159,8 +323,11 @@ internal sealed class AppSettings
     {
         try
         {
-            Directory.CreateDirectory(SettingsDir);
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOpts));
+            lock (_wirelessBatteryHistoryLock)
+            {
+                Directory.CreateDirectory(SettingsDir);
+                File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOpts));
+            }
             Log.Info("settings saved");
         }
         catch (Exception ex)
@@ -201,6 +368,11 @@ internal sealed class AppSettings
         // 真正的格式校验留给加载方（GlyphTypeface 对坏文件抛 FileFormatException）。
         MusicCapsuleLyricFontPath ??= "";
         MusicCapsuleLyricFontPath = MusicCapsuleLyricFontPath.Trim();
+        WirelessBatteryCustomNames = new Dictionary<string, string>(WirelessBatteryCustomNames ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+        WirelessBatteryDeviceTypes = new Dictionary<string, string>(WirelessBatteryDeviceTypes ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+        WirelessBatteryHistory = new Dictionary<string, WirelessBatteryHistoryEntry>(WirelessBatteryHistory ?? new Dictionary<string, WirelessBatteryHistoryEntry>(), StringComparer.OrdinalIgnoreCase);
+        foreach (var key in WirelessBatteryDeviceTypes.Keys.ToArray())
+            if (!IsKnownWirelessBatteryType(WirelessBatteryDeviceTypes[key]) || WirelessBatteryDeviceTypes[key] == "auto") WirelessBatteryDeviceTypes.Remove(key);
         if (!TryNormalizeTime(LightStartTime, out var lt)) lt = TimeSpan.FromHours(7);
         if (!TryNormalizeTime(DarkStartTime, out var dt)) dt = TimeSpan.FromHours(19);
         LightStartTime = FormatTime(lt);

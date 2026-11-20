@@ -19,6 +19,8 @@ public partial class App : System.Windows.Application
     private MusicCapsuleWindow? _capsule;
     private SystemMonitorService? _monitor;
     private SystemMonitorCapsuleWindow? _monitorWindow;
+    private WirelessBatteryService? _wirelessBattery;
+    private WirelessBatteryCapsuleWindow? _wirelessBatteryWindow;
     private Views.IslandBorderWindow? _islandBorderMiddle;
     private Views.IslandBorderWindow? _islandBorderTray;
     private System.Windows.Threading.DispatcherTimer? _ownerGuardTimer;
@@ -430,6 +432,8 @@ public partial class App : System.Windows.Application
         ApplyMenuTheme(Settings?.EffectiveTone);
         try { _monitorWindow?.RefreshBackground(); }
         catch (Exception ex) { Services.Log.Debug($"monitor refresh background failed: {ex.Message}"); }
+        try { _wirelessBatteryWindow?.RefreshBackground(); }
+        catch (Exception ex) { Services.Log.Debug($"wireless battery refresh background failed: {ex.Message}"); }
         try { _capsule?.RefreshBackground(); }
         catch (Exception ex) { Services.Log.Debug($"capsule refresh background failed: {ex.Message}"); }
     }
@@ -465,6 +469,80 @@ public partial class App : System.Windows.Application
         {
             Services.Log.Error($"SyncSystemMonitor failed: {ex.Message}");
         }
+
+        SyncWirelessBattery();
+    }
+
+    private void SyncWirelessBattery()
+    {
+        try
+        {
+            if (_settings.WirelessBatteryEnabled)
+            {
+                if (_wirelessBattery is null)
+                {
+                    _wirelessBattery = new WirelessBatteryService(_settings);
+                    _wirelessBattery.Start();
+                    Services.Log.Info("wireless battery enabled, sampling started");
+                }
+                _wirelessBatteryWindow?.AttachService(_wirelessBattery);
+            }
+            else if (_wirelessBattery is not null)
+            {
+                _wirelessBatteryWindow?.AttachService(null);
+                _wirelessBattery.Dispose();
+                _wirelessBattery = null;
+                Services.Log.Info("wireless battery disabled, sampling stopped");
+            }
+
+            _wirelessBatteryWindow?.RefreshFromSettings();
+            UpdateWirelessBatteryPlacement();
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Error($"SyncWirelessBattery failed: {ex.Message}");
+        }
+    }
+
+    private bool _batteryPlacementQueued;
+
+    private void OnMonitorPlacementChanged(object? sender, EventArgs e) => QueueWirelessBatteryPlacement();
+    private void OnMonitorSizeChanged(object sender, SizeChangedEventArgs e) => QueueWirelessBatteryPlacement();
+    private void OnMonitorVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e) => QueueWirelessBatteryPlacement();
+
+    private void QueueWirelessBatteryPlacement()
+    {
+        // 等当前监控窗的显隐/布局完成，避免同步定位电量窗重入 WPF 的窗口尺寸更新。
+        if (_batteryPlacementQueued || Dispatcher.HasShutdownStarted) return;
+        _batteryPlacementQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _batteryPlacementQueued = false;
+            if (!Dispatcher.HasShutdownStarted) UpdateWirelessBatteryPlacement();
+        }), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnMonitorClosed(object? sender, EventArgs e)
+    {
+        if (sender is not SystemMonitorCapsuleWindow monitor) return;
+        monitor.LocationChanged -= OnMonitorPlacementChanged;
+        monitor.SizeChanged -= OnMonitorSizeChanged;
+        monitor.IsVisibleChanged -= OnMonitorVisibilityChanged;
+        monitor.Closed -= OnMonitorClosed;
+    }
+
+    private void UpdateWirelessBatteryPlacement()
+    {
+        if (_wirelessBatteryWindow is null) return;
+        Rect? monitorBounds = null;
+        if (_monitorWindow is { IsVisible: true })
+        {
+            var handle = new System.Windows.Interop.WindowInteropHelper(_monitorWindow).Handle;
+            if (handle != IntPtr.Zero && Interop.NativeMethods.GetWindowRect(handle, out var bounds))
+                monitorBounds = new Rect(bounds.left, bounds.top,
+                    bounds.right - bounds.left, bounds.bottom - bounds.top);
+        }
+        _wirelessBatteryWindow.UpdatePlacement(monitorBounds);
     }
 
     internal void SaveSettings()
@@ -528,11 +606,25 @@ public partial class App : System.Windows.Application
         try
         {
             _monitorWindow = new SystemMonitorCapsuleWindow(_settings);
+            _monitorWindow.LocationChanged += OnMonitorPlacementChanged;
+            _monitorWindow.SizeChanged += OnMonitorSizeChanged;
+            _monitorWindow.IsVisibleChanged += OnMonitorVisibilityChanged;
+            _monitorWindow.Closed += OnMonitorClosed;
             SyncSystemMonitor();
         }
         catch (Exception ex)
         {
             Services.Log.Error($"system monitor init failed: {ex}");
+        }
+
+        try
+        {
+            _wirelessBatteryWindow = new WirelessBatteryCapsuleWindow(_settings);
+            SyncWirelessBattery();
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Error($"wireless battery init failed: {ex}");
         }
 
         try
@@ -571,6 +663,12 @@ public partial class App : System.Windows.Application
             try { _monitorWindow.AttachService(null); } catch { }
             try { _monitorWindow.Close(); } catch { }
             _monitorWindow = null;
+        }
+        if (_wirelessBatteryWindow != null)
+        {
+            try { _wirelessBatteryWindow.AttachService(null); } catch { }
+            try { _wirelessBatteryWindow.Close(); } catch { }
+            _wirelessBatteryWindow = null;
         }
         if (_islandBorderMiddle != null)
         {
@@ -639,6 +737,11 @@ public partial class App : System.Windows.Application
                     var h = new System.Windows.Interop.WindowInteropHelper(_monitorWindow).Handle;
                     if (h != IntPtr.Zero && !Interop.NativeMethods.IsWindow(h)) dead = true;
                 }
+                if (_wirelessBatteryWindow != null)
+                {
+                    var h = new System.Windows.Interop.WindowInteropHelper(_wirelessBatteryWindow).Handle;
+                    if (h != IntPtr.Zero && !Interop.NativeMethods.IsWindow(h)) dead = true;
+                }
                 if (_islandBorderMiddle != null)
                 {
                     var h = new System.Windows.Interop.WindowInteropHelper(_islandBorderMiddle).Handle;
@@ -664,6 +767,11 @@ public partial class App : System.Windows.Application
                 // 巡检补齐 owner 绑定
                 if (_capsule != null) AcrylicWindowHelper.EnsureBoundToTaskbar(_capsule);
                 if (_monitorWindow != null) AcrylicWindowHelper.EnsureBoundToTaskbar(_monitorWindow);
+                if (_wirelessBatteryWindow != null)
+                {
+                    AcrylicWindowHelper.EnsureBoundToTaskbar(_wirelessBatteryWindow);
+                    UpdateWirelessBatteryPlacement();
+                }
                 if (_islandBorderMiddle != null) AcrylicWindowHelper.EnsureBoundToTaskbar(_islandBorderMiddle);
                 if (_islandBorderTray != null) AcrylicWindowHelper.EnsureBoundToTaskbar(_islandBorderTray);
             }
@@ -693,6 +801,8 @@ public partial class App : System.Windows.Application
             try { _capsule?.Close(); } catch { }
             try { _monitor?.Dispose(); } catch { }
             try { _monitorWindow?.Close(); } catch { }
+            try { _wirelessBattery?.Dispose(); } catch { }
+            try { _wirelessBatteryWindow?.Close(); } catch { }
             try { _islandBorderMiddle?.Close(); } catch { }
             try { _islandBorderTray?.Close(); } catch { }
             try { Services.TaskbarService.CleanUp(); } catch { }
