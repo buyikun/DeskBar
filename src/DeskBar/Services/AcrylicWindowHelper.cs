@@ -360,7 +360,11 @@ internal static class AcrylicWindowHelper
         // 正常启动时两者同带（均为 DESKTOP），走下面的常规压暗路径，行为不变。
         if (!GetWindowBand(hwnd, out uint windowBand) || !GetWindowBand(overlay, out uint overlayBand))
             return OverlayYieldResult.None;
-        if (windowBand != overlayBand) return OverlayYieldResult.NeedsCollapse;
+        if (windowBand != overlayBand)
+        {
+            Log.Debug($"overlay band mismatch: hwnd=0x{hwnd.ToInt64():X} band={windowBand} overlayBand={overlayBand}; collapsing until overlay gone");
+            return OverlayYieldResult.NeedsCollapse;
+        }
 
         var owner = GetWindowLongPtr(hwnd, GWLP_HWNDPARENT);
         if (owner != IntPtr.Zero)
