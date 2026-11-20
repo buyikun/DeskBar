@@ -178,7 +178,7 @@ cd /d/ai/deskbar && bash deploy.sh
 - 脚本把 9 个环境变量重定向到仓库内，且日志路径相对 cwd，**必须在 `D:\ai\deskbar` 下执行**；判据串是中文，**放 bash 判，不要放 PowerShell**。
 - `$LASTEXITCODE` 只在同一条 PowerShell 会话里可查，跨进程取不到——不能作为独立判据。
 
-**完整链条固定为 `build.ps1` → `publish.ps1` → `deploy.sh`**。只 build 不 publish 会让 `out_publish\` 停留在旧版，制造「改了却没生效」的假象。
+**完整链条固定为 `build.ps1` → `publish.ps1` → `deploy.sh`**。只 build 不 publish 会让 `out_publish\` 停留在旧版，制造「改了却没生效」的假象。改动 RID 目标时用对应 RID 的强制 `Rebuild`；增量发布可能跳过 `CoreCompile` 并复制旧 DLL，部署前核对 `bin`、`out_publish`、部署目录程序集哈希一致。
 
 **部署脚本只认 `deploy.sh`**。`deploy.ps1` / `deploy2.ps1` 是历史遗留，行为互不一致（前者不跳过 `ExplorerTAP.dll` 且用 `-ErrorAction Continue` 静默吞掉覆盖失败）。**不要用它们，也不要「顺手统一」**。
 
@@ -237,6 +237,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scrat
 - **扩张判定必须是两侧同时向外**（`desiredC1 < _targetC1 && desiredC2 > _targetC2`）。单侧 1px 漂移走无死区快通道，就会把 UIA 动画抖动放大成任务栏边界抽搐。
 - **按住鼠标左键期间必须完全冻结重排**（`GetAsyncKeyState(VK_LBUTTON) & 0x8000`），松手后再同步最终位置。否则拖拽托盘图标时几何会打架。
 - **隐藏浮岛必须 ≥900ms 时长门控**。托盘图标重排瞬间 `GetWindowRect` 偶发返回高度为 0，单帧命中就 `Hide`，表现为瞬时闪烁消失。
+- 浮岛位置依赖另一个窗口时，将 `LocationChanged`、`SizeChanged`、`IsVisibleChanged` 合并排队到 `DispatcherPriority.Loaded` 再定位（见 `src/DeskBar/App.xaml.cs:502-515`）；同步回调可能重入 WPF `SizeToContent` 协商。全屏让位会折叠监控窗，恢复 `Visible` 不保证高度复原；回归须覆盖全屏启动后退出，并检查实际 HWND 与 WPF 高度。
+- 截图遮罩（`SnipOverlayRootWindow`）覆盖浮岛时，先比较窗口与遮罩的 z 序带（`GetWindowBand`）：同带才 `SetWindowPos` 压到遮罩之下一起变暗；跨带时 `SetWindowPos` 跨带无效，改为折叠窗口，等遮罩消失再由 16ms 巡检恢复（见 `src/DeskBar/Services/AcrylicWindowHelper.cs:346` 的 `TryYieldToCaptureOverlay`）。
 - 描边窗口必须在 `SourceInitialized` 里附加 `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` 实现点击穿透；首帧先放到 `-32000` 算好几何再显示，避免闪一下。
 
 ### 4.4 外观引擎与降级
@@ -303,6 +305,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scrat
 - 单实例用 `Local\DeskBar_SingleInstance` 互斥体 + `Local\DeskBar_WakeEvent` 唤醒事件。提权实例创建的 `Local\` 互斥体普通进程打不开，因此**必须捕获 `UnauthorizedAccessException` 并让位退出**，不能让它崩。
 - 副实例退出必须走 `Environment.Exit(0)`，**绝不能执行 `OnExit` 的清理逻辑**——否则会把主实例的任务栏区域与托盘状态一并破坏。
 - 浮岛自愈靠 `IsWindow(h)` 判定（句柄曾存在但现在失效才是真死），并**限速 5 秒一次全量重建**。未 Show / Handle 尚未初始化的窗口绝不是 dead，判错会无限重构。
+- **诊断截图选区的遮罩层级时必须在同一采样点保存屏幕帧和 `EnumWindows` Z 序**：截图工具可能保留已结束选区的冻结帧；不要把旧帧和当前 HWND 可见性直接对照，也不要重复检查同一状态。
 - `WM_TASKBARCREATED` 只注册、未消费；真正的自愈走上面的 2 秒轮询。不要以为挂了消息处理。
 
 ### 4.9 进程托管：从 AI 宿主启动的 DeskBar 会被连带杀死
