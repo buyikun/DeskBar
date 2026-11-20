@@ -173,117 +173,115 @@ public sealed class SystemMonitorService : IDisposable
 
             if (status != 0) return false;
 
-        var rawList = new List<ProcessMetricItem>(256);
-        var currentTimes = new Dictionary<int, ProcessTimes>(256);
+            if (returnLength < 152 || returnLength > _ntBufferSize) return false;
+            int dataLength = (int)returnLength;
+            const int minimumEntrySize = 152;
+            if (dataLength < minimumEntrySize) return false;
 
-        long totalSystemDelta = 0;
-        double idleDelta = 0;
+            var rawList = new List<ProcessMetricItem>(256);
+            var currentTimes = new Dictionary<int, ProcessTimes>(256);
 
-        IntPtr curr = _ntBuffer;
-        while (curr != IntPtr.Zero)
-        {
-            // 读取 64 位 SYSTEM_PROCESS_INFORMATION 确切字段布局:
-            // 0: NextEntryOffset (ULONG)
-            // 8: WorkingSetPrivateSize (LARGE_INTEGER)
-            // 40: UserTime (LARGE_INTEGER)
-            // 48: KernelTime (LARGE_INTEGER)
-            // 56: ImageName.Length (USHORT)
-            // 64: ImageName.Buffer (IntPtr)
-            // 80: UniqueProcessId (IntPtr)
-            // 144: WorkingSetSize (IntPtr)
+            long totalSystemDelta = 0;
+            double idleDelta = 0;
 
-            uint nextOffset = (uint)Marshal.ReadInt32(curr, 0);
-            long workingSetPrivate = Marshal.ReadInt64(curr, 8);
-            long userTime = Marshal.ReadInt64(curr, 40);
-            long kernelTime = Marshal.ReadInt64(curr, 48);
-
-            ushort nameLen = (ushort)Marshal.ReadInt16(curr, 56);
-            IntPtr nameBuf = Marshal.ReadIntPtr(curr, 64);
-            IntPtr pidPtr = Marshal.ReadIntPtr(curr, 80);
-            int pid = pidPtr.ToInt32();
-
-            IntPtr workingSetSize = Marshal.ReadIntPtr(curr, 144);
-
-            currentTimes[pid] = new ProcessTimes { KernelTime = kernelTime, UserTime = userTime };
-
-            string procName = $"PID {pid}";
-            if (pid == 0)
+            long bufferStart = _ntBuffer.ToInt64();
+            int entryOffset = 0;
+            while (entryOffset <= dataLength - minimumEntrySize)
             {
-                procName = "System Idle Process";
-            }
-            else if (pid == 4)
-            {
-                procName = "System";
-            }
-            else if (nameLen > 0 && nameLen < 1024 && nameBuf != IntPtr.Zero)
-            {
-                try
-                {
-                    procName = Marshal.PtrToStringUni(nameBuf, nameLen / 2) ?? $"PID {pid}";
-                }
-                catch
-                {
-                    procName = $"PID {pid}";
-                }
-            }
+                IntPtr curr = IntPtr.Add(_ntBuffer, entryOffset);
+                // 64-bit SYSTEM_PROCESS_INFORMATION offsets: ImageName at 56/64,
+                // PID at 80, and WorkingSetSize at 144.
+                uint nextOffset = (uint)Marshal.ReadInt32(curr, 0);
+                int remaining = dataLength - entryOffset;
+                if (nextOffset != 0 && (nextOffset < minimumEntrySize || nextOffset > remaining - minimumEntrySize))
+                    return false;
+                long entryEnd = bufferStart + entryOffset + (nextOffset == 0 ? remaining : nextOffset);
 
-            long delta = 0;
-            if (_kernelSamplePrimed && _prevProcessTimes.TryGetValue(pid, out var prev))
-            {
-                long dk = kernelTime - prev.KernelTime;
-                long du = userTime - prev.UserTime;
-                if (dk < 0) dk = 0;
-                if (du < 0) du = 0;
-                delta = dk + du;
-                totalSystemDelta += delta;
+                long workingSetPrivate = Marshal.ReadInt64(curr, 8);
+                long userTime = Marshal.ReadInt64(curr, 40);
+                long kernelTime = Marshal.ReadInt64(curr, 48);
 
+                ushort nameLen = (ushort)Marshal.ReadInt16(curr, 56);
+                IntPtr nameBuf = Marshal.ReadIntPtr(curr, 64);
+                IntPtr pidPtr = Marshal.ReadIntPtr(curr, 80);
+                int pid = pidPtr.ToInt32();
+                IntPtr workingSetSize = Marshal.ReadIntPtr(curr, 144);
+
+                currentTimes[pid] = new ProcessTimes { KernelTime = kernelTime, UserTime = userTime };
+
+                string procName = $"PID {pid}";
                 if (pid == 0)
                 {
-                    idleDelta = delta;
+                    procName = "System Idle Process";
                 }
+                else if (pid == 4)
+                {
+                    procName = "System";
+                }
+                else if (nameLen > 0 && nameLen < 1024 && (nameLen & 1) == 0 && nameBuf != IntPtr.Zero)
+                {
+                    long nameAddress = nameBuf.ToInt64();
+                    if (nameAddress >= bufferStart + entryOffset && nameAddress <= entryEnd - nameLen)
+                        procName = Marshal.PtrToStringUni(nameBuf, nameLen / 2) ?? procName;
+                }
+
+                long delta = 0;
+                if (_kernelSamplePrimed && _prevProcessTimes.TryGetValue(pid, out var prev))
+                {
+                    long dk = kernelTime - prev.KernelTime;
+                    long du = userTime - prev.UserTime;
+                    if (dk < 0) dk = 0;
+                    if (du < 0) du = 0;
+                    delta = dk + du;
+                    totalSystemDelta += delta;
+
+                    if (pid == 0)
+                    {
+                        idleDelta = delta;
+                    }
+                }
+
+                double memMb = (workingSetPrivate > 0 ? workingSetPrivate : workingSetSize.ToInt64()) / 1048576.0;
+
+                rawList.Add(new ProcessMetricItem
+                {
+                    Pid = pid,
+                    Name = procName,
+                    MemoryMb = Math.Max(0, memMb),
+                    CpuPercent = delta // 暂存时钟周期增量，后续归一化
+                });
+
+                if (nextOffset == 0) break;
+                entryOffset += (int)nextOffset;
             }
 
-            double memMb = (workingSetPrivate > 0 ? workingSetPrivate : workingSetSize.ToInt64()) / 1048576.0;
-
-            rawList.Add(new ProcessMetricItem
+            // 更新历史表
+            _prevProcessTimes.Clear();
+            foreach (var kv in currentTimes)
             {
-                Pid = pid,
-                Name = procName,
-                MemoryMb = Math.Max(0, memMb),
-                CpuPercent = delta // 暂存时钟周期增量，后续归一化
-            });
+                _prevProcessTimes[kv.Key] = kv.Value;
+            }
 
-            if (nextOffset == 0) break;
-            curr = IntPtr.Add(curr, (int)nextOffset);
-        }
+            if (!_kernelSamplePrimed || totalSystemDelta <= 0)
+            {
+                _kernelSamplePrimed = true;
+                return true;
+            }
 
-        // 更新历史表
-        _prevProcessTimes.Clear();
-        foreach (var kv in currentTimes)
-        {
-            _prevProcessTimes[kv.Key] = kv.Value;
-        }
+            // 计算全机总 CPU 占用率 (与任务管理器保持一致: 100 - 空闲百分比)
+            double busyRatio = Math.Clamp(1.0 - (idleDelta / totalSystemDelta), 0.0, 1.0);
+            m.CpuPercent = busyRatio * 100.0;
 
-        if (!_kernelSamplePrimed || totalSystemDelta <= 0)
-        {
-            _kernelSamplePrimed = true;
+            // 计算每个进程的 CPU 百分比
+            foreach (var p in rawList)
+            {
+                p.CpuPercent = Math.Clamp(p.CpuPercent * 100.0 / totalSystemDelta, 0.0, 100.0);
+            }
+
+            // 聚合同名进程并选出 Top 5 资源消耗最高的进程
+            m.TopProcesses = ProcessListMerger.MergeAndSort(rawList, topCount: 5, sortByCpu: true);
+
             return true;
-        }
-
-        // 计算全机总 CPU 占用率 (与任务管理器保持一致: 100 - 空闲百分比)
-        double busyRatio = Math.Clamp(1.0 - (idleDelta / totalSystemDelta), 0.0, 1.0);
-        m.CpuPercent = busyRatio * 100.0;
-
-        // 计算每个进程的 CPU 百分比
-        foreach (var p in rawList)
-        {
-            p.CpuPercent = Math.Clamp(p.CpuPercent * 100.0 / totalSystemDelta, 0.0, 100.0);
-        }
-
-        // 聚合同名进程并选出 Top 5 资源消耗最高的进程
-        m.TopProcesses = ProcessListMerger.MergeAndSort(rawList, topCount: 5, sortByCpu: true);
-
-        return true;
         }
         catch (Exception ex)
         {
