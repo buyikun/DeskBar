@@ -253,7 +253,7 @@ internal static class AcrylicWindowHelper
             var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
 
-            if (TryYieldToCaptureOverlay(hwnd)) return;
+            if (TryYieldToCaptureOverlay(hwnd) != OverlayYieldResult.None) return;
 
             var tray = FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return;
@@ -275,17 +275,28 @@ internal static class AcrylicWindowHelper
                 return;
             }
 
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            // 截图遮罩在场时优先处理：能压到遮罩之下就交给它一起变暗；
+            // 压不下去（band 不一致）则折叠隐藏，避免浮在压暗层之上。
+            // 这两步必须在恢复可见之前判断，否则下一轮 16ms 巡检又会被下面的
+            // !IsVisible 分支把刚折叠的窗口立刻拉回来。
+            var overlayResult = TryYieldToCaptureOverlay(hwnd);
+            if (overlayResult == OverlayYieldResult.NeedsCollapse)
+            {
+                if (window.Visibility != Visibility.Collapsed)
+                    window.Visibility = Visibility.Collapsed;
+                return;
+            }
+            if (overlayResult != OverlayYieldResult.None) return;
+
             if (!window.IsVisible)
             {
                 if (window.Visibility == Visibility.Collapsed)
                     window.Visibility = Visibility.Visible;
                 return;
             }
-
-            var hwnd = new WindowInteropHelper(window).Handle;
-            if (hwnd == IntPtr.Zero) return;
-
-            if (TryYieldToCaptureOverlay(hwnd)) return;
 
             var tray = FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return;
@@ -308,38 +319,65 @@ internal static class AcrylicWindowHelper
         catch { }
     }
 
-    private static bool TryYieldToCaptureOverlay(IntPtr hwnd)
+    /// <summary>
+    /// 截图遮罩在场时的处理结果。
+    /// </summary>
+    private enum OverlayYieldResult
     {
-        IntPtr overlay = FindWindowW("SnipOverlayRootWindow", null);
-        if (overlay == IntPtr.Zero || !IsWindowVisible(overlay)) return false;
+        /// <summary>没有截图遮罩，或遮罩不覆盖本窗口，无需处理。</summary>
+        None,
+        /// <summary>已经压到遮罩之下（或本就压在下面），调用方应直接返回。</summary>
+        Handled,
+        /// <summary>遮罩覆盖本窗口，但窗口与遮罩不在同一 z 序带，压不下去，需要折叠隐藏。</summary>
+        NeedsCollapse,
+    }
 
-        if (!Interop.NativeMethods.GetWindowRect(hwnd, out var windowRect)) return false;
-        if (!Interop.NativeMethods.GetWindowRect(overlay, out var overlayRect) ||
-            !CoversWindow(overlayRect, windowRect)) return false;
-
-        GetWindowThreadProcessId(overlay, out uint overlayProcessId);
-        if (overlayProcessId == 0) return false;
-
-        var owner = GetWindowLongPtr(hwnd, GWLP_HWNDPARENT);
-        if (owner != IntPtr.Zero)
-        {
-            SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, IntPtr.Zero);
-            if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != IntPtr.Zero) return false;
-        }
-
-        // 压暗是遮罩本体（SnipOverlayRootWindow）自己画的一层半透明覆盖，所以只有插到它
-        // 正下方才会跟着一起变暗。早先这里插的是「遮罩组里最高的那个同进程窗口」，
-        // 而那个窗口（XamlWindow）本身就压在遮罩之上 —— 胶囊被插在两者之间，
-        // 依旧浮在压暗层上面，正是「截图时组件浮现、跟任务栏不在同一层」的成因。
+    private static bool IsBelowOverlay(IntPtr hwnd, IntPtr overlay)
+    {
         IntPtr previous = GetWindow(hwnd, GW_HWNDPREV);
         for (int i = 0; i < 80 && previous != IntPtr.Zero; i++)
         {
             if (previous == overlay) return true;
             previous = GetWindow(previous, GW_HWNDPREV);
         }
+        return false;
+    }
+
+    private static OverlayYieldResult TryYieldToCaptureOverlay(IntPtr hwnd)
+    {
+        IntPtr overlay = FindWindowW("SnipOverlayRootWindow", null);
+        if (overlay == IntPtr.Zero || !IsWindowVisible(overlay)) return OverlayYieldResult.None;
+
+        if (!Interop.NativeMethods.GetWindowRect(hwnd, out var windowRect)) return OverlayYieldResult.None;
+        if (!Interop.NativeMethods.GetWindowRect(overlay, out var overlayRect) ||
+            !CoversWindow(overlayRect, windowRect)) return OverlayYieldResult.None;
+
+        GetWindowThreadProcessId(overlay, out uint overlayProcessId);
+        if (overlayProcessId == 0) return OverlayYieldResult.None;
+
+        // 窗口与遮罩不在同一个 z 序带（band）时，SetWindowPos 跨带无效，窗口会一直浮在
+        // 遮罩的压暗层之上。这种状态下唯一可靠的做法是折叠窗口，等遮罩消失再恢复。
+        // 正常启动时两者同带（均为 DESKTOP），走下面的常规压暗路径，行为不变。
+        if (!GetWindowBand(hwnd, out uint windowBand) || !GetWindowBand(overlay, out uint overlayBand))
+            return OverlayYieldResult.None;
+        if (windowBand != overlayBand) return OverlayYieldResult.NeedsCollapse;
+
+        var owner = GetWindowLongPtr(hwnd, GWLP_HWNDPARENT);
+        if (owner != IntPtr.Zero)
+        {
+            SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, IntPtr.Zero);
+            if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != IntPtr.Zero) return OverlayYieldResult.Handled;
+        }
+
+        // 压暗是遮罩本体（SnipOverlayRootWindow）自己画的一层半透明覆盖，所以只有插到它
+        // 正下方才会跟着一起变暗。早先这里插的是「遮罩组里最高的那个同进程窗口」，
+        // 而那个窗口（XamlWindow）本身就压在遮罩之上 —— 胶囊被插在两者之间，
+        // 依旧浮在压暗层上面，正是「截图时组件浮现、跟任务栏不在同一层」的成因。
+        if (IsBelowOverlay(hwnd, overlay)) return OverlayYieldResult.Handled;
 
         return SetWindowPos(hwnd, overlay, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
+            ? OverlayYieldResult.Handled : OverlayYieldResult.None;
     }
 
     private static bool CoversWindow(Interop.NativeMethods.RECT outer, Interop.NativeMethods.RECT inner)
@@ -370,6 +408,9 @@ internal static class AcrylicWindowHelper
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowBand(IntPtr hWnd, out uint pdwBand);
 
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
