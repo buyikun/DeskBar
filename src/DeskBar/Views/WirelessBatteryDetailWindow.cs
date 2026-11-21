@@ -214,9 +214,12 @@ internal sealed class WirelessBatteryDetailWindow : Window
         if (_closed || _editing) return;
         _deviceList.Children.Clear();
         string tone = _settings.EffectiveTone;
-        _hiddenToggleButton.Content = _showHidden ? "返回设备" : "已隐藏设备";
-        var displayedDevices = devices.Where(device => device.IsHidden == _showHidden).ToArray();
-        _title.Text = _showHidden ? "已隐藏设备" : "无线设备电量";
+        _hiddenToggleButton.Content = _showHidden ? "返回设备" : "不显示的设备";
+        // 「不显示」页只列 DisplayMode=never 的设备；其余（常显 / 连接时）在主列表。
+        var displayedDevices = devices
+            .Where(device => (device.DisplayMode == WirelessBatteryDisplayModes.Never) == _showHidden)
+            .ToArray();
+        _title.Text = _showHidden ? "不显示的设备" : "无线设备电量";
         foreach (var device in displayedDevices)
         {
             bool known = device.Percent is >= 0 and <= 100;
@@ -318,8 +321,14 @@ internal sealed class WirelessBatteryDetailWindow : Window
                 RenderDevices(_service?.CurrentDevices ?? Array.Empty<WirelessBatteryDevice>());
             };
             var management = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
-            var visibilityButton = new Button { Content = device.IsHidden ? "恢复显示" : "隐藏", Width = 68, Height = 26, Cursor = Cursors.Hand, Style = _refreshButton.Style, FontSize = 11 };
-            visibilityButton.Click += (_, _) => _service?.SetHidden(device.Id, !device.IsHidden);
+            var visibilityButton = new Button
+            {
+                // 三态循环按钮：显示当前模式，点一下切到下一个。
+                Content = WirelessBatteryDisplayModes.Label(device.DisplayMode),
+                Width = 68, Height = 26, Cursor = Cursors.Hand, Style = _refreshButton.Style, FontSize = 11,
+                ToolTip = "显示方式，点击循环切换：\n连接时（断开就隐藏，默认）→ 常显（断开也显示最后电量）→ 不显示\n永久移除请用「移除」。"
+            };
+            visibilityButton.Click += (_, _) => _service?.SetDisplayMode(device.Id, NextDisplayMode(device.DisplayMode));
             var removeButton = new Button { Content = "移除", Width = 56, Height = 26, Margin = new Thickness(6, 0, 0, 0), Cursor = Cursors.Hand, Style = _refreshButton.Style, FontSize = 11, ToolTip = "从历史记录中移除此设备" };
             removeButton.Click += (_, _) =>
             {
@@ -334,10 +343,18 @@ internal sealed class WirelessBatteryDetailWindow : Window
             cardContent.Children.Add(management);
             _deviceList.Children.Add(new Border { Background = TonePalette.PanelCardBrush(tone), BorderBrush = TonePalette.PanelCardBorderBrush(tone), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 8), Opacity = device.IsStale ? 0.7 : 1, Child = cardContent });
         }
-        _status.Text = _showHidden ? $"已隐藏 {displayedDevices.Length} 台设备" : _service?.StatusText ?? "电量采集服务不可用";
+        _status.Text = _showHidden ? $"设为不显示 {displayedDevices.Length} 台设备" : _service?.StatusText ?? "电量采集服务不可用";
         if (displayedDevices.Length == 0)
-            _deviceList.Children.Add(new TextBlock { Text = _showHidden ? "没有隐藏的设备。" : devices.Count == 0 ? "暂未发现可读取电量的无线设备。连接设备后点击刷新。" : "没有显示中的设备。可在“已隐藏设备”中恢复。", FontSize = 12, Foreground = TonePalette.PanelTextSecondaryBrush(tone), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 10, 2, 2) });
+            _deviceList.Children.Add(new TextBlock { Text = _showHidden ? "没有设为不显示的设备。" : devices.Count == 0 ? "暂未发现可读取电量的无线设备。连接设备后点击刷新。" : "没有显示中的设备。可在“不显示的设备”中改回来。", FontSize = 12, Foreground = TonePalette.PanelTextSecondaryBrush(tone), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 10, 2, 2) });
     }
+
+    /// <summary>三态循环：连接时 → 常显 → 不显示 → 连接时。</summary>
+    private static string NextDisplayMode(string? current) => WirelessBatteryDisplayModes.Normalize(current) switch
+    {
+        WirelessBatteryDisplayModes.Connected => WirelessBatteryDisplayModes.Always,
+        WirelessBatteryDisplayModes.Always => WirelessBatteryDisplayModes.Never,
+        _ => WirelessBatteryDisplayModes.Connected
+    };
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {

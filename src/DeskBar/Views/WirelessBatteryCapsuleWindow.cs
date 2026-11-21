@@ -17,6 +17,19 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
 {
     private const double HeightDip = 44;
     private const int GapPx = 6;
+
+    /// <summary>最多显示几个设备；再多的折叠成「+N」。按可用空间在此上限内动态取。</summary>
+    private const int MaxVisibleDevices = 4;
+    /// <summary>单设备宽度（DIP）：图标 19 + 百分比文本。</summary>
+    private const double ItemWidthWithPercent = 48;
+    /// <summary>没有电量时的单设备宽度：只画图标，不给「--」占位。</summary>
+    private const double ItemWidthIconOnly = 26;
+    /// <summary>设备之间的竖分隔线 + 左右各 4px 外边距。</summary>
+    private const double SeparatorWidth = 9;
+    /// <summary>胶囊左右内边距合计。</summary>
+    private const double HorizontalPadding = 20;
+    /// <summary>「+N」文字的估算宽度（10pt）。只用于判断放不放得下。</summary>
+    private const double MoreLabelWidth = 22;
     private readonly AppSettings _settings;
     private readonly Border _root;
     private readonly StackPanel _items;
@@ -28,8 +41,14 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
     private Rect? _monitorBoundsPx;
     private DateTime _taskbarUnavailableSince = DateTime.MinValue;
     private bool _closed;
+    private bool _shouldShow;
+    internal bool WantsLayerMaintenance => _shouldShow && !_closed;
     private int _serviceVersion;
     private int _renderedCount = -1;
+    /// <summary>上一次渲染的「显示几个 + 各设备有无电量」签名，用来跳过无变化的重建。</summary>
+    private string _renderedKey = "";
+    /// <summary>上一次算出的可用宽度（DIP）；刷新配色时沿用它，避免胶囊先撑宽再被缩回。</summary>
+    private double _lastAvailableDip = double.PositiveInfinity;
     private int _lastX = int.MinValue, _lastY = int.MinValue, _lastWidth, _lastHeight;
 
     internal WirelessBatteryCapsuleWindow(AppSettings settings)
@@ -96,7 +115,7 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
         _emptyLabel.Foreground = TonePalette.CapsuleTextMutedBrush(tone);
         AcrylicWindowHelper.Apply(this, tone, "wireless-battery", _settings.TaskbarBlurAmount);
         _detailWindow?.RefreshTonePalette();
-        RenderDevices(_renderedCount < 0 ? 2 : _renderedCount, force: true);
+        RenderDevices(MaxVisibleDevices, _lastAvailableDip, force: true);
     }
 
     /// <param name="monitorBoundsPx">当前可见系统监控胶囊的物理像素矩形；无监控时为 null。</param>
@@ -106,6 +125,15 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
         if ((NativeMethods.GetAsyncKeyState(NativeMethods.VK_LBUTTON) & 0x8000) != 0) return;
         _monitorBoundsPx = monitorBoundsPx;
         if (!_settings.WirelessBatteryEnabled) { HideCapsule(); return; }
+        if (TaskbarService.IsFullscreenForeground()) return;
+        if (AcrylicWindowHelper.IsLayerSuppressed(this) && !IsVisible) return;
+        // 所有设备都被设成「不显示」时，整块胶囊一起收起，而不是留一个空的「无线 --」。
+        // （_devices 为空表示还没检测到任何设备，那种情况下保留占位提示。）
+        if (_devices.Count > 0 && !_devices.Any(device => device.IsVisibleOnTaskbar))
+        {
+            HideCapsule();
+            return;
+        }
         int tbLeft = 0, tbTop = 0, tbWidth = 0, tbHeight = 0;
         bool available = TaskbarService.IsTaskbarOnScreen()
             && TaskbarService.TryGetTaskbarBounds(out tbLeft, out tbTop, out tbWidth, out tbHeight)
@@ -117,37 +145,40 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
             return;
         }
         _taskbarUnavailableSince = DateTime.MinValue;
-        // 未知中心应用区边界时先隐藏，绝不猜测可用空间覆盖应用按钮。
+        // 几何暂时取不到（例如任务栏刚重建、UIA 尚未就绪）时保留上一次的位置，绝不 Hide ——
+        // 与监控浮岛 / 描边窗口同一口径。旧写法在这里直接 HideCapsule，于是「切个设置项
+        // 触发 ApplyStyle 重建任务栏区域」就会让组件消失几百毫秒再出现。
         if (!TaskbarService.TryGetIslandRectsOnScreen(out int appLeft, out _, out _, out _, out _, out _))
-        { HideCapsule(); return; }
+            return;
 
         IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
         double scale = GetDpi() / 96.0;
         int x = monitorBoundsPx is Rect monitor && !monitor.IsEmpty && monitor.Width > 0
             ? (int)Math.Ceiling(monitor.Right) + GapPx : tbLeft + 10;
         int room = Math.Min(appLeft - GapPx, tbLeft + tbWidth) - x;
-        RenderDevices(2);
+        // 按可用空间在 MaxVisibleDevices 上限内动态决定显示几个，不再写死 2 个。
+        _lastAvailableDip = room / scale;
+        RenderDevices(MaxVisibleDevices, _lastAvailableDip);
         int widthPx = (int)Math.Ceiling(Width * scale);
-        if (widthPx > room && _devices.Count > 1)
-        {
-            RenderDevices(1);
-            widthPx = (int)Math.Ceiling(Width * scale);
-        }
         if (room < widthPx || x < tbLeft) { HideCapsule(); return; }
+        AcrylicWindowHelper.ClearLayerSuppression(this);
         int heightPx = (int)Math.Round(HeightDip * scale);
         int y = tbTop + (tbHeight - heightPx) / 2;
         bool wasVisible = IsVisible;
         if (x != _lastX || y != _lastY || widthPx != _lastWidth || heightPx != _lastHeight || !wasVisible)
         {
-            // 只移动尺寸，不改变 Z 序；层级交给 taskbar owner 与 App 的 ownerGuard。
+            // 只移动尺寸，不改变 Z 序；层级交给 taskbar owner 与 App 的共享 layerGuard。
             if (!SetWindowPos(hwnd, IntPtr.Zero, x, y, widthPx, heightPx, 0x0010 | 0x0004 | 0x0200)) return;
             _lastX = x; _lastY = y; _lastWidth = widthPx; _lastHeight = heightPx;
         }
+        _shouldShow = true;
         if (!wasVisible)
         {
-            Show();
             AcrylicWindowHelper.BindToTaskbarLayer(this);
+            Show();
         }
+        if (AcrylicWindowHelper.ShouldDeferForCaptureOverlay(this)) return;
+        AcrylicWindowHelper.ClearLayerSuppression(this);
     }
 
     private void QueueDevices(IReadOnlyList<WirelessBatteryDevice> devices, int version)
@@ -157,7 +188,8 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
         {
             if (_closed || version != _serviceVersion) return;
             _devices = devices;
-            _renderedCount = -1;
+            // 设备列表换了，强制重建一次（签名比较只挡「内容完全相同」的重复渲染）。
+            _renderedKey = "";
             UpdatePlacement(_monitorBoundsPx);
         }
         if (Dispatcher.CheckAccess()) Apply();
@@ -168,26 +200,36 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
         }
     }
 
-    private void RenderDevices(int limit, bool force = false)
+    /// <param name="limit">最多显示几个，仍受 <see cref="MaxVisibleDevices"/> 约束。</param>
+    /// <param name="availableDip">可用宽度（DIP）；放不下就逐个减到放得下。</param>
+    private void RenderDevices(int limit, double availableDip = double.PositiveInfinity, bool force = false)
     {
-        var visibleDevices = _devices.Where(device => !device.IsHidden)
+        var visibleDevices = _devices.Where(device => device.IsVisibleOnTaskbar)
             .OrderByDescending(device => device.IsConnected)
             .ThenBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
-        int count = Math.Min(limit, Math.Min(2, visibleDevices.Length));
-        if (!force && _renderedCount == count) return;
+
+        int upper = Math.Min(Math.Min(limit, MaxVisibleDevices), visibleDevices.Length);
+        int count = upper;
+        while (count > 0 && EstimateCapsuleWidth(visibleDevices, count) > availableDip) count--;
+
+        string key = BuildRenderKey(visibleDevices, count);
+        if (!force && _renderedKey == key) return;
+        _renderedKey = key;
         _renderedCount = count;
+
         _items.Children.Clear();
         _items.Visibility = count == 0 ? Visibility.Collapsed : Visibility.Visible;
         _emptyLabel.Visibility = count == 0 ? Visibility.Visible : Visibility.Collapsed;
         if (count == 0) { Width = 80; return; }
+
         for (int i = 0; i < count; i++)
         {
             if (i > 0) _items.Children.Add(new Border { Width = 1, Height = 22, Margin = new Thickness(4, 0, 4, 0), Background = TonePalette.CapsuleTrackBrush(_settings.EffectiveTone) });
             _items.Children.Add(CreateDeviceItem(visibleDevices[i]));
         }
-        const double itemWidth = 48;
-        double width = 20 + count * itemWidth + (count - 1) * 9;
+
+        double width = EstimateCapsuleWidth(visibleDevices, count, includeMore: false);
         int hidden = visibleDevices.Length - count;
         if (hidden > 0)
         {
@@ -199,6 +241,32 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
         Width = Math.Ceiling(width);
     }
 
+    /// <summary>
+    /// 估算显示 <paramref name="count"/> 个设备时的胶囊宽度（DIP）。只用于「放不放得下」的判断，
+    /// 实际宽度在渲染后用 Measure 修正，所以这里允许少量误差。
+    /// </summary>
+    private static double EstimateCapsuleWidth(IReadOnlyList<WirelessBatteryDevice> devices, int count, bool includeMore = true)
+    {
+        double width = HorizontalPadding;
+        for (int i = 0; i < count; i++)
+        {
+            if (i > 0) width += SeparatorWidth;
+            width += devices[i].Percent is >= 0 and <= 100 ? ItemWidthWithPercent : ItemWidthIconOnly;
+        }
+        if (includeMore && devices.Count > count) width += MoreLabelWidth;
+        return width;
+    }
+
+    /// <summary>显示个数 + 每个设备有无电量的签名；任一变化都要重建（无电量只画图标，宽度会变）。</summary>
+    private static string BuildRenderKey(IReadOnlyList<WirelessBatteryDevice> devices, int count)
+    {
+        var sb = new System.Text.StringBuilder(count + 1);
+        sb.Append((char)('0' + count));
+        for (int i = 0; i < count; i++)
+            sb.Append(devices[i].Percent is >= 0 and <= 100 ? '1' : '0');
+        return sb.ToString();
+    }
+
     private FrameworkElement CreateDeviceItem(WirelessBatteryDevice device)
     {
         string tone = _settings.EffectiveTone;
@@ -207,13 +275,30 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
         string type = _settings.GetWirelessBatteryType(device.Id, device.Type);
         Brush fore = known && device.Percent <= 15 ? TonePalette.MetricSparkBrush(tone) : TonePalette.CapsuleTextBrush(tone);
         var header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(19) });
-        header.ColumnDefinitions.Add(new ColumnDefinition());
-        header.Children.Add(new TextBlock { Text = GetDeviceGlyph(type), FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 14, Foreground = fore, VerticalAlignment = VerticalAlignment.Center });
-        var percent = new TextBlock { Text = known ? $"{device.Percent}%" : "--", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = fore, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(percent, 1);
-        header.Children.Add(percent);
-        var item = new StackPanel { Width = 48, VerticalAlignment = VerticalAlignment.Center, Opacity = device.IsStale ? 0.65 : 1, ToolTip = $"{name}\n{(known ? $"{device.Percent}%" : "电量未知")}{(device.IsStale ? " · 上次读取" : "")}" };
+        // 有电量时「图标 + 百分比」两列；没有电量时不给第二列，让图标在整格里居中，
+        // 否则图标会被 19px 的固定列顶到左边、右边空一条。
+        if (known)
+        {
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(19) });
+            header.ColumnDefinitions.Add(new ColumnDefinition());
+        }
+        header.Children.Add(new TextBlock
+        {
+            Text = GetDeviceGlyph(type),
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 14,
+            Foreground = fore,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = known ? HorizontalAlignment.Left : HorizontalAlignment.Center
+        });
+        // 没有电量时不写「--」、不占文本位，只留图标。
+        if (known)
+        {
+            var percent = new TextBlock { Text = $"{device.Percent}%", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = fore, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(percent, 1);
+            header.Children.Add(percent);
+        }
+        var item = new StackPanel { Width = known ? ItemWidthWithPercent : ItemWidthIconOnly, VerticalAlignment = VerticalAlignment.Center, Opacity = device.IsStale ? 0.65 : 1, ToolTip = $"{name}\n{(known ? $"{device.Percent}%" : "电量未知")}{(device.IsStale ? " · 上次读取" : "")}" };
         item.Children.Add(header);
         return item;
     }
@@ -240,8 +325,11 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
 
     private void HideCapsule()
     {
+        _shouldShow = false;
+        AcrylicWindowHelper.ClearLayerSuppression(this);
         _detailWindow?.Close();
-        if (IsVisible) Hide();
+        if (Visibility == Visibility.Collapsed) Visibility = Visibility.Hidden;
+        else if (IsVisible) Hide();
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -265,6 +353,8 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _closed = true;
+        _shouldShow = false;
+        AcrylicWindowHelper.ClearLayerSuppression(this);
         ++_serviceVersion;
         if (_service != null && _devicesChangedHandler != null) _service.DevicesChanged -= _devicesChangedHandler;
         _service = null;

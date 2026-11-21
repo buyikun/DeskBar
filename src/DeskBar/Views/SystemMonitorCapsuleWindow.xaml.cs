@@ -32,9 +32,8 @@ public partial class SystemMonitorCapsuleWindow : Window
     private DateTime _taskbarGoneSince = DateTime.MinValue;
     private const int TaskbarGoneMsNeeded = 900;
 
-    // 16ms 轻量 z 序守卫：整条模式下浮岛不再挖洞，靠它保持压在任务栏之上。
-    private DispatcherTimer? _zGuard;
     private bool _isDisposed;
+    internal bool WantsLayerMaintenance => _shown && !_isDisposed;
     private SystemMonitorDetailWindow? _detailWindow;
     private SystemMetrics? _latestMetrics;
 
@@ -55,7 +54,6 @@ public partial class SystemMonitorCapsuleWindow : Window
         {
             _isDisposed = true;
             StopPositionTimer();
-            StopZGuard();
             try { _detailWindow?.Close(); } catch { }
             _detailWindow = null;
             if (_service != null)
@@ -65,7 +63,6 @@ public partial class SystemMonitorCapsuleWindow : Window
             }
         };
         RootBorder.Opacity = 0;
-        StartZGuard();
     }
 
     // ---------------- 外部接口 ----------------
@@ -208,6 +205,7 @@ public partial class SystemMonitorCapsuleWindow : Window
 
         if (_isDisposed) return;
         _shown = true;
+        AcrylicWindowHelper.ClearLayerSuppression(this);
         _lastX = int.MinValue;   // 重新显示时强制做一次定位
         try
         {
@@ -231,6 +229,7 @@ public partial class SystemMonitorCapsuleWindow : Window
         try { _detailWindow?.CloseWithAnimation(); } catch { }
         TaskbarService.ClearWidgetExclusion("monitor");
         _shown = false;
+        AcrylicWindowHelper.ClearLayerSuppression(this);
         if (!IsVisible)
         {
             RootBorder.BeginAnimation(UIElement.OpacityProperty, null);
@@ -264,23 +263,6 @@ public partial class SystemMonitorCapsuleWindow : Window
     {
         try { _posTimer?.Stop(); } catch { }
         _posTimer = null;
-    }
-
-    private void StartZGuard()
-    {
-        if (_zGuard != null) return;
-        _zGuard = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-        _zGuard.Tick += (_, _) =>
-        {
-            if (_shown) AcrylicWindowHelper.KeepAboveTaskbar(this);
-        };
-        _zGuard.Start();
-    }
-
-    private void StopZGuard()
-    {
-        try { _zGuard?.Stop(); } catch { }
-        _zGuard = null;
     }
 
     /// <summary>

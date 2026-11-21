@@ -73,6 +73,16 @@
 2. **中：应用区描边** `IslandBorderWindow(Middle)` — 贴住任务栏运行应用组，纯描边、鼠标 100% 穿透。
 3. **右：音乐胶囊** `MusicCapsuleWindow` — 封面、歌名歌手、逐字歌词、上一曲/暂停/下一曲。
 4. **托盘区描边** `IslandBorderWindow(Tray)` — 框选托盘通知图标群。
+5. **无线设备电量胶囊** `WirelessBatteryCapsuleWindow` — 跟随时停靠在**系统监控浮岛右侧**（不是任务栏固定位置），显示无线外设电量。
+   - **最多显示 4 个设备，按可用空间动态取**（`MaxVisibleDevices` + `EstimateCapsuleWidth`）；超过部分折叠成 `+N`。**不要再写死「最多 2 个」**（曾有 `Math.Min(limit, Math.Min(2, …))` 把上限卡死在 2，3 个设备就一定变成「2 个 + `+1`」，与空间无关）。
+   - **没有电量的设备只画图标**：`Items` 宽度从 `ItemWidthWithPercent`(48) 降到 `ItemWidthIconOnly`(26)，且不渲染 `--` 占位。宽度参与 `EstimateCapsuleWidth` 计算，所以「有/无电量」变化必须进 `_renderedKey` 签名，否则会停在旧的宽度上。
+   - **显示方式是三态、按设备设置**（`WirelessBatteryDisplayModes`）：`always` 常显（断开也用最后一次读数、stale 时压暗）、`connected` 连接时显示 / 断开隐藏（默认）、`never` 完全不显示。详情窗每台设备一个循环按钮，点击顺序 **连接时 → 常显 → 不显示**。
+     - 胶囊要不要显示该设备**统一走 `WirelessBatteryDevice.IsVisibleOnTaskbar`**，不要在窗口里各写一份 switch。
+     - **所有设备都是 `never` 时整块胶囊收起**（`UpdatePlacement` 里 `_devices.Count > 0 && !Any(IsVisibleOnTaskbar)` → `HideCapsule`），而不是留一个空的「无线 --」；只有 `_devices` 为空（还没检测到任何设备）时才显示占位。
+     - **`IsConnected` 与 `MissingSinceUtc` 都必须落盘**：前者是模式二的判据，不落盘的话每次启动所有设备都从「未连接」起步、胶囊整块消失；后者做去抖——扫描周期 60 秒，AULA 这类省电设备单次漏读也会整轮缺席，连续缺席 ≥ `DisconnectGrace`（120 秒）才算真断开。
+     - **`BuildHistoryDevices` 里必须是 `connected ? live.IsConnected : entry.IsConnected`**，不能写 `connected || entry.IsConnected` —— `SetDisplayMode` 会把**旧设备列表**整个当 `found` 传进来，那样所有历史设备都会被判成已连接，`never` 之外的全部显示出来。
+     - **`scanComplete` 只表示「各读取器没抛异常」，不等于「找到了所有已记录设备」**：读取器正常返回但没发现设备时它仍是 true。所以「未读到」不能直接当成「断开」。
+     - 旧版二态字段 `Hidden` **只用于迁移**（`AppSettings.Normalize` 里把 `Hidden=true` 转成 `DisplayMode=never` 并清空），不要再写入它。
 
 ### 2.4 三种融合模式
 | 模式 | 行为 |
@@ -229,6 +239,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File shot_taskbar.ps1 -Out .scrat
 - **移动浮岛只许** `SetWindowPos(hwnd, IntPtr.Zero, ..., SWP_NOACTIVATE | SWP_NOZORDER)`；Z 序交给 `KeepAboveTaskbar` 单独处理。传 `HWND_TOPMOST` 会让锚点可能返回自身或已销毁句柄，整次调用失效且**位置不生效**。
 - **层级靠 owner，不靠 TOPMOST**：用 `SetWindowLongPtr(GWLP_HWNDPARENT)` 把浮岛 owner 绑到 `Shell_TrayWnd`，由内核保证 owned 窗口恒在 owner 之上。`App` 每 2 秒巡检补绑（`EnsureBoundToTaskbar`）。任何新增的周期性 topmost 都会与托盘弹出菜单（音量/网络/日历）抢置顶，表现为**剧烈频闪**。
 - **`KeepAboveTaskbar` 一旦判定已在任务栏上方就必须什么都不做** —— 别改成「每次都抬」。
+- **三个浮岛共用 `App` 的一个 16ms `_layerGuardTimer`**（`App.xaml.cs:693` 的 `StartLayerGuard()`），每个窗口只暴露 `WantsLayerMaintenance` 门闩告诉守卫「我现在该显示」。**不要再给单个浮岛加 ZGuard 定时器**（音乐胶囊与监控浮岛原来各有一份，已删除）：三份 16ms 定时器各自调 `SetWindowPos` 会互相把对方往任务栏正上方挤。
+- **锚点只取「任务栏正上方那个窗口」**：`GetWindow(tray, GW_HWNDPREV)`，拿不到（为零、等于自身、已销毁）就**直接跳过本次调整**。**绝不兜底 `HWND_TOPMOST`** —— 那是浮岛被永久置顶、压过音量面板之类弹出层的根源（历史 bug：`TaskbarLayerAnchor()` 在前置窗口不存在时返回 `HWND_TOPMOST`，一次调用就把窗口钉进 topmost 层）。
+- **临时折叠必须记录来源**：全屏让位与截图遮罩跨 band 会让 `MaintainTaskbarLayer` 把窗口置 `Collapsed`，用 `LayerSuppressedWindows`（`ConditionalWeakTable`）记下「是我折叠的」，之后**只恢复自己折叠过的窗口**；窗口自己 `Hide()` 的（`Visibility.Hidden`）一律返回，不要拉回。各窗在 `ShowCapsule()` / `ShowPanel()` 与 `HideCapsule()` / `HidePanel()` 里调 `ClearLayerSuppression`。
+- **`WS_EX_TOPMOST` 会随任务栏状态变化**：任务栏被 explorer / 截图工具 / 外部工具抬成 topmost 时，owned 浮岛可能一并进入 topmost 层；反过来任务栏降回非 topmost 后，`MaintainTaskbarLayer` 会把浮岛也对齐回去并**重新插到任务栏上方**（实测 2 秒内完成）。所以「浮岛是 topmost」本身不一定是 bug，要看它与任务栏是否一致。
+- **几何暂时取不到时必须保留上一次位置，绝不 Hide**（三个组件同一口径）。`SaveSettings()` 每次都会调 `TaskbarService.ApplyStyle()`（`App.xaml.cs:587`），它会 `RestoreTaskbarRegion` + 重建区域，导致 `TryGetIslandRectsOnScreen` 有几百毫秒取不到值。无线摘要曾在 `WirelessBatteryCapsuleWindow.UpdatePlacement` 里直接 `HideCapsule()`，于是**在设置页点一下白名单 chip（增/删都触发 `Persist()` → `SaveSettings`）就会看到组件消失约 700ms 再出现**（实测隐藏 0.7s）。已改为 `return`（保留位置），与监控浮岛 / 描边窗口一致。**不要把这条改回 Hide**；任务栏真的没了的情况由上面 `!available` 的 900ms 门控负责收起。
 - **`RaiseAboveTaskbarIfCovered` 目前全仓无调用方**，是遗留路径。想复用它来「压过截图工具遮罩」是无效的：**代码里从来没有实现截图遮罩检测**，只有两处注释描述。真正的保护是「与任务栏同层」的锚点关系——截图遮罩作为顶层窗口天然压在浮岛之上。**若确实要实现，得在 `KeepAboveTaskbar` 里新写逐层检索，不要依赖现有注释。**
 - **裁剪任务栏前必须同时校验两点**：`NativeTaskbarAppearanceService.IsAvailable` 为真，且边界值非负。缺任一条都会把开始区 / 搜索框 / 时钟区整块挖掉，且没有磨砂层补偿——用户看到的是「任务栏功能全废、点空白处穿透」。注入失败时走降级分支（只监视几何、一像素不动）。
 - **周期性几何重排必须先判「未变即 return」**，并配 `SWP_NOOWNERZORDER`。

@@ -9,6 +9,33 @@ using System.Threading.Tasks;
 
 namespace DeskBar.Services;
 
+/// <summary>
+/// 无线设备的三种显示模式（按设备设置）：
+/// <list type="bullet">
+/// <item><c>always</c> 常显 —— 断开后仍用最后一次读数显示（stale 时压暗）。</item>
+/// <item><c>connected</c> 连接时显示、断开隐藏 —— 默认。</item>
+/// <item><c>never</c> 完全不显示。</item>
+/// </list>
+/// </summary>
+internal static class WirelessBatteryDisplayModes
+{
+    public const string Always = "always";
+    public const string Connected = "connected";
+    public const string Never = "never";
+
+    public static bool IsKnown(string? value) => value is Always or Connected or Never;
+
+    public static string Normalize(string? value) => IsKnown(value) ? value! : Connected;
+
+    /// <summary>按钮/菜单上的短标签。</summary>
+    public static string Label(string? value) => Normalize(value) switch
+    {
+        Always => "常显",
+        Never => "不显示",
+        _ => "连接时"
+    };
+}
+
 internal sealed class WirelessBatteryHistoryEntry
 {
     public WirelessBatteryHistoryEntry() { }
@@ -19,9 +46,21 @@ internal sealed class WirelessBatteryHistoryEntry
     public int Percent { get; set; } = -1;
     public string Connection { get; set; } = string.Empty;
     public DateTime LastSeenUtc { get; set; }
+    /// <summary>显示模式，见 <see cref="WirelessBatteryDisplayModes"/>。默认「连接时显示」。</summary>
+    public string DisplayMode { get; set; } = WirelessBatteryDisplayModes.Connected;
+    /// <summary>旧版二态「隐藏」字段，仅用于迁移成 <see cref="DisplayMode"/> = never，不再写入。</summary>
     public bool Hidden { get; set; }
-    [System.Text.Json.Serialization.JsonIgnore]
+    /// <summary>
+    /// 上一次已知的连接状态。**必须落盘**：模式二（连接时显示/断开隐藏）依赖它，
+    /// 若不落盘，每次启动它都从 false 起步，会把「接着的设备」判成断开、把胶囊整块藏掉。
+    /// </summary>
     public bool IsConnected { get; set; }
+    /// <summary>
+    /// 连续「没被读到」的起始时刻；读到就清空，落盘以便跨重启保留。
+    /// 用于去抖：扫描周期 60 秒，AULA 这类省电设备单次漏读也会整轮缺席，
+    /// 只有连续缺席超过 DisconnectGrace 才算真的断开。
+    /// </summary>
+    public DateTime? MissingSinceUtc { get; set; }
     [System.Text.Json.Serialization.JsonIgnore]
     public bool ConnectionKnown { get; set; }
     [System.Text.Json.Serialization.JsonIgnore]
@@ -31,7 +70,7 @@ internal sealed class WirelessBatteryHistoryEntry
 
 internal sealed class WirelessBatteryDevice
 {
-    internal WirelessBatteryDevice(string id, string name, int percent, string connection, bool isStale, string type = "other", bool isConnected = true, bool connectionKnown = true, bool isHidden = false)
+    internal WirelessBatteryDevice(string id, string name, int percent, string connection, bool isStale, string type = "other", bool isConnected = true, bool connectionKnown = true, string displayMode = WirelessBatteryDisplayModes.Connected)
     {
         Id = id;
         Name = name;
@@ -41,7 +80,7 @@ internal sealed class WirelessBatteryDevice
         Type = AppSettings.IsKnownWirelessBatteryType(type) && type != "auto" ? type : "other";
         IsConnected = isConnected;
         ConnectionKnown = connectionKnown;
-        IsHidden = isHidden;
+        DisplayMode = WirelessBatteryDisplayModes.Normalize(displayMode);
     }
 
     internal string Id { get; }
@@ -51,8 +90,15 @@ internal sealed class WirelessBatteryDevice
     internal bool IsStale { get; }
     internal bool IsConnected { get; }
     internal bool ConnectionKnown { get; }
-    internal bool IsHidden { get; }
+    internal string DisplayMode { get; }
     internal string Type { get; }
+    /// <summary>按自身显示模式判断现在该不该出现在任务栏上。</summary>
+    internal bool IsVisibleOnTaskbar => DisplayMode switch
+    {
+        WirelessBatteryDisplayModes.Never => false,
+        WirelessBatteryDisplayModes.Always => true,
+        _ => IsConnected
+    };
     internal string DisplayPercent => Percent is >= 0 and <= 100 ? $"{Percent}%" : "--";
 }
 
@@ -207,13 +253,13 @@ internal sealed class WirelessBatteryService : IDisposable
         }
     }
 
-    internal void SetHidden(string id, bool hidden)
+    internal void SetDisplayMode(string id, string mode)
     {
         IReadOnlyList<WirelessBatteryDevice> updated;
         lock (_stateLock)
         {
             if (_disposed || !_currentDevices.Any(device => StringComparer.OrdinalIgnoreCase.Equals(device.Id, id))) return;
-            _settings.SetWirelessBatteryHidden(id, hidden);
+            _settings.SetWirelessBatteryDisplayMode(id, mode);
             var history = _settings.GetWirelessBatteryHistory();
             updated = BuildHistoryDevices(history, _currentDevices.ToArray(), connectedKnown: false);
             _currentDevices = updated;
@@ -275,7 +321,10 @@ internal sealed class WirelessBatteryService : IDisposable
         foreach (var entry in history)
         {
             bool connected = byId.TryGetValue(entry.Id, out var live);
-            bool isConnected = connected ? live!.IsConnected : connectedKnown ? false : entry.IsConnected;
+            // 连接状态：found 里有就该用**它自己的** IsConnected；没有则沿用 history 里
+            // 「去抖后」的值（可能还在宽限期内）。不能写成 `connected || entry.IsConnected` ——
+            // SetDisplayMode 会把旧设备列表整个传进 found，那样所有历史设备都会被判成已连接。
+            bool isConnected = connected ? live!.IsConnected : entry.IsConnected;
             string name = connected && !string.IsNullOrWhiteSpace(live!.Name) ? live.Name : entry.Name;
             bool hasFreshPercent = connected && live!.Percent is >= 0 and <= 100;
             int percent = hasFreshPercent ? live!.Percent : entry.Percent;
@@ -283,7 +332,7 @@ internal sealed class WirelessBatteryService : IDisposable
             string type = connected ? live!.Type : entry.Type;
             bool knownState = !forceUnknown && (connected ? live!.ConnectionKnown : entry.ConnectionKnown);
             bool stale = !connected || (connected && live!.IsStale) || (!hasFreshPercent && percent >= 0);
-            result.Add(new WirelessBatteryDevice(entry.Id, name, percent, connection, stale, type, isConnected, knownState, entry.Hidden));
+            result.Add(new WirelessBatteryDevice(entry.Id, name, percent, connection, stale, type, isConnected, knownState, entry.DisplayMode));
         }
         return Array.AsReadOnly(result.ToArray());
     }
@@ -300,7 +349,7 @@ internal sealed class WirelessBatteryService : IDisposable
             for (var i = 0; i < previous.Count; i++)
             {
                 var device = previous[i];
-                copy[i] = new WirelessBatteryDevice(device.Id, device.Name, device.Percent, device.Connection, true, device.Type, device.IsConnected, device.ConnectionKnown, device.IsHidden);
+                copy[i] = new WirelessBatteryDevice(device.Id, device.Name, device.Percent, device.Connection, true, device.Type, device.IsConnected, device.ConnectionKnown, device.DisplayMode);
             }
             stale = Array.AsReadOnly(copy);
             _currentDevices = stale;

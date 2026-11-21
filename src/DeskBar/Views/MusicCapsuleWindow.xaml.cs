@@ -35,9 +35,10 @@ public partial class MusicCapsuleWindow : Window
 
     private DateTime _taskbarGoneSince = DateTime.MinValue;
     private const int TaskbarGoneMsNeeded = 900;
-    private DispatcherTimer? _zGuard;
     private DispatcherTimer? _followTimer;
     private bool _isDisposed;
+
+    internal bool WantsLayerMaintenance => _shown && !_isDisposed;
 
     private bool _hovering;
     private DispatcherTimer? _hoverTimer;
@@ -105,7 +106,6 @@ public partial class MusicCapsuleWindow : Window
         {
             _isDisposed = true;
             StopPositionTimer();
-            StopZGuard();
             StopFollowTimer();
             StopHoverTimer();
             StopScrollTimer();
@@ -119,7 +119,6 @@ public partial class MusicCapsuleWindow : Window
         };
 
         ApplyTone();
-        StartZGuard();
         StartFollowTimer();
         StartHoverTimer();
         StartScrollTimer();
@@ -730,27 +729,6 @@ public partial class MusicCapsuleWindow : Window
         _posTimer = null;
     }
 
-    private void StartZGuard()
-    {
-        if (_zGuard is not null) return;
-        _zGuard = new DispatcherTimer(DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromMilliseconds(16)
-        };
-        _zGuard.Tick += (_, _) =>
-        {
-            if (_shown) AcrylicWindowHelper.KeepAboveTaskbar(this);
-        };
-        _zGuard.Start();
-    }
-
-    private void StopZGuard()
-    {
-        if (_zGuard is null) return;
-        _zGuard.Stop();
-        _zGuard = null;
-    }
-
     private void StartFollowTimer()
     {
         if (_followTimer is not null) return;
@@ -834,6 +812,11 @@ public partial class MusicCapsuleWindow : Window
         }
 
         if (_isDisposed) return;
+        if (TaskbarService.IsFullscreenForeground())
+        {
+            if (_shown) HideCapsule();
+            return;
+        }
 
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero)
@@ -883,6 +866,7 @@ public partial class MusicCapsuleWindow : Window
     {
         TaskbarService.ClearWidgetExclusion("capsule");
         _shown = false;
+        AcrylicWindowHelper.ClearLayerSuppression(this);
         if (!IsVisible)
         {
             RootBorder.BeginAnimation(UIElement.OpacityProperty, null);

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -11,6 +12,14 @@ namespace DeskBar.Services;
 /// </summary>
 internal static class AcrylicWindowHelper
 {
+    private sealed class LayerSuppressionState
+    {
+        public bool IsSuppressed;
+        public DateTime LastAlignmentWarningUtc;
+    }
+
+    private static readonly ConditionalWeakTable<Window, LayerSuppressionState> LayerSuppressedWindows = new();
+
     /// <summary>
     /// 当前任务栏风格是不是「岛」档 —— 只有这一档浮岛悬在壁纸上方、必须自己带材质。
     /// 整条模式（acrylic / clear）下浮岛靠 AllowsTransparency=True 的 WPF 真透明，
@@ -190,42 +199,25 @@ internal static class AcrylicWindowHelper
 
             if (above != tray && GetAncestor(above, GA_ROOT) != tray) return;
 
-            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            KeepAboveTaskbar(window);
         }
         catch { }
     }
 
-    /// <summary>
-    /// 无条件把自己钉在最上层（被谁压着不管是任务栏还是弹出面板）。
-    /// 只挪 z 序、不发 SWP_SHOWWINDOW，所以不会象早先那版每 400ms 那样把浮岛重绘出闪烁。
-    /// 与 RaiseAboveTaskbarIfCovered 的区别：那个只在「正上方就是任务栏」时才动手，
-    /// 太保守——只要任务栏不是紧挨着我们上面，它就永远不会出手，而任务栏照样把我们盖住。
-    /// </summary>
-    /// <summary>
-    /// 「与任务栏同层」的锚点：任务栏正上方那个窗口。
-    /// 把本窗口插到它正下方，就等于待在任务栏正上方 —— 截图工具的遮罩、音量面板
-    /// 这些本来就在任务栏之上的窗口依旧压着我们（跟着一起变暗、点不到），
-    /// 而任务栏自己永远盖不住我们。
-    /// </summary>
+    /// <summary>任务栏上方的相邻窗口；为零表示当前层级顶部。</summary>
     public static IntPtr TaskbarLayerAnchor()
     {
         try
         {
             var tray = FindWindowW("Shell_TrayWnd", null);
-            if (tray == IntPtr.Zero) return HWND_TOPMOST;
-            var above = GetWindow(tray, GW_HWNDPREV);
-            return above == IntPtr.Zero ? HWND_TOPMOST : above;
+            return tray == IntPtr.Zero ? IntPtr.Zero : GetWindow(tray, GW_HWNDPREV);
         }
-        catch { return HWND_TOPMOST; }
+        catch { return IntPtr.Zero; }
     }
 
     private const int GWLP_HWNDPARENT = -8;
 
-    /// <summary>
-    /// 把浮岛窗口设为任务栏（Shell_TrayWnd）的 owned window。
-    /// OS 内核层保证 owned window 永远排在 owner 之上，彻底杜绝 z 序竞争与反复置顶拉锯。
-    /// </summary>
+    /// <summary>把浮岛窗口设为任务栏（Shell_TrayWnd）的 owned window；owner 不替代 Z 序校准。</summary>
     public static bool BindToTaskbarLayer(Window window)
     {
         try
@@ -238,7 +230,7 @@ internal static class AcrylicWindowHelper
 
             if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) == tray) return true;
             SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, tray);
-            return true;
+            return GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) == tray;
         }
         catch { return false; }
     }
@@ -258,65 +250,180 @@ internal static class AcrylicWindowHelper
             var tray = FindWindowW("Shell_TrayWnd", null);
             if (tray == IntPtr.Zero) return;
 
-            if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) == tray) return;
-            SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, tray);
+            if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != tray)
+            {
+                SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, tray);
+                if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != tray) return;
+            }
         }
         catch { }
     }
 
     public static void KeepAboveTaskbar(Window window)
+        => MaintainTaskbarLayer(window, shouldBeVisible: window.IsVisible || IsLayerSuppressed(window));
+
+    public static bool IsLayerSuppressed(Window window)
+        => LayerSuppressedWindows.TryGetValue(window, out var state) && state.IsSuppressed;
+
+    /// <summary>截图遮罩是否要求本窗口让位（已压到遮罩之下或需要折叠时返回 true）。</summary>
+    public static bool ShouldDeferForCaptureOverlay(Window window)
     {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero) return false;
+        var result = TryYieldToCaptureOverlay(hwnd);
+        if (result == OverlayYieldResult.NeedsCollapse)
+            SuppressForLayerMaintenance(window);
+        return result != OverlayYieldResult.None;
+    }
+
+    public static void ClearLayerSuppression(Window window)
+        => LayerSuppressedWindows.Remove(window);
+
+    private static void SuppressForLayerMaintenance(Window window)
+    {
+        var state = LayerSuppressedWindows.GetValue(window, _ => new LayerSuppressionState());
+        state.IsSuppressed = true;
+        if (window.Visibility != Visibility.Collapsed)
+            window.Visibility = Visibility.Collapsed;
+    }
+
+    public static void MaintainTaskbarLayer(Window window, bool shouldBeVisible)
+        => MaintainTaskbarLayer(window, shouldBeVisible, TaskbarService.IsFullscreenForeground());
+
+    public static void MaintainTaskbarLayer(Window window, bool shouldBeVisible, bool isFullscreen)
+    {
+        if (window.Visibility == Visibility.Hidden) return;
+        if (!shouldBeVisible)
+        {
+            ClearLayerSuppression(window);
+            return;
+        }
         try
         {
-            if (TaskbarService.IsFullscreenForeground())
+            if (isFullscreen)
             {
-                if (window.Visibility != Visibility.Collapsed)
-                    window.Visibility = Visibility.Collapsed;
+                SuppressForLayerMaintenance(window);
                 return;
             }
 
             var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
 
-            // 截图遮罩在场时优先处理：能压到遮罩之下就交给它一起变暗；
-            // 压不下去（band 不一致）则折叠隐藏，避免浮在压暗层之上。
-            // 这两步必须在恢复可见之前判断，否则下一轮 16ms 巡检又会被下面的
-            // !IsVisible 分支把刚折叠的窗口立刻拉回来。
+            // 截图遮罩在场时优先处理：遮罩消失前保持已折叠/下压状态。
             var overlayResult = TryYieldToCaptureOverlay(hwnd);
             if (overlayResult == OverlayYieldResult.NeedsCollapse)
             {
-                if (window.Visibility != Visibility.Collapsed)
-                    window.Visibility = Visibility.Collapsed;
+                SuppressForLayerMaintenance(window);
                 return;
             }
             if (overlayResult != OverlayYieldResult.None) return;
 
-            if (!window.IsVisible)
+            if (window.Visibility == Visibility.Collapsed)
             {
-                if (window.Visibility == Visibility.Collapsed)
-                    window.Visibility = Visibility.Visible;
+                if (!IsLayerSuppressed(window)) return;
+                window.Visibility = Visibility.Visible;
+                ClearLayerSuppression(window);
+            }
+            else if (window.IsVisible)
+            {
+                ClearLayerSuppression(window);
+            }
+            else
+            {
                 return;
             }
 
             var tray = FindWindowW("Shell_TrayWnd", null);
-            if (tray == IntPtr.Zero) return;
+            if (tray == IntPtr.Zero || !Interop.NativeMethods.IsWindow(tray)) return;
 
-            // 已经在任务栏上方就什么都不做 —— 否则两个浮岛 + 两条描边会互相把对方
-            // 往「任务栏正上方」那一个位置上挤，每 16ms 换一次 z 序。
-            IntPtr cur = hwnd;
-            for (int i = 0; i < 40; i++)
+            if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != tray)
             {
-                cur = GetWindow(cur, GW_HWNDPREV);
-                if (cur == IntPtr.Zero) break;
-                if (cur == tray || GetAncestor(cur, GA_ROOT) == tray)
+                SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, tray);
+                if (GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != tray) return;
+            }
+
+            if (!GetWindowBand(hwnd, out uint windowBand) ||
+                !GetWindowBand(tray, out uint taskbarBand) || windowBand != taskbarBand)
+                return;
+
+            bool taskbarTopmost = (GetWindowLongPtr(tray, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+            bool windowTopmost = (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+            bool levelChanged = taskbarTopmost != windowTopmost;
+            if (levelChanged)
+            {
+                IntPtr level = taskbarTopmost ? HWND_TOPMOST : HWND_NOTOPMOST;
+                if (!SetWindowPos(hwnd, level, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER))
                 {
-                    SetWindowPos(hwnd, TaskbarLayerAnchor(), 0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                    LogLayerAlignmentIncomplete(window, hwnd, "topmost transition failed");
+                    return;
+                }
+                if (((GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0) != taskbarTopmost ||
+                    GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != tray)
+                {
+                    LogLayerAlignmentIncomplete(window, hwnd, "topmost transition changed owner or did not apply");
                     return;
                 }
             }
+
+            bool? taskbarAbove = IsTaskbarAboveWindow(hwnd, tray);
+            if (taskbarAbove is null) return;
+            // 层级状态刚被改过时，窗口可能因此沉到任务栏下方，必须继续做一次定位。
+            if (!levelChanged && taskbarAbove == false) return;
+
+            // 锚点只取「任务栏正上方那个窗口」：插到它下方就是紧贴任务栏上方，
+            // 既不会越过音量面板之类的弹出层，也不会把窗口永久推到 topmost。
+            // 拿不到锚点说明任务栏已在层顶，此时什么都不做比乱插安全。
+            IntPtr anchor = GetWindow(tray, GW_HWNDPREV);
+            if (anchor == IntPtr.Zero || anchor == hwnd) return;
+            if (!Interop.NativeMethods.IsWindow(anchor)) return;
+
+            if (!SetWindowPos(hwnd, anchor, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER))
+            {
+                LogLayerAlignmentIncomplete(window, hwnd, "z-order move failed");
+                return;
+            }
+
+            bool finalTopmost = (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+            bool? finalTaskbarAbove = IsTaskbarAboveWindow(hwnd, tray);
+            if (finalTopmost != taskbarTopmost || GetWindowLongPtr(hwnd, GWLP_HWNDPARENT) != tray ||
+                finalTaskbarAbove != false)
+                LogLayerAlignmentIncomplete(window, hwnd, $"postcondition failed; anchor=0x{anchor.ToInt64():X}");
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 层级纠正失败时的诊断日志。16ms 巡检会反复命中同一情况，按窗口限频 5 秒。
+    /// </summary>
+    private static void LogLayerAlignmentIncomplete(Window window, IntPtr hwnd, string reason)
+    {
+        var state = LayerSuppressedWindows.GetValue(window, _ => new LayerSuppressionState());
+        var now = DateTime.UtcNow;
+        if ((now - state.LastAlignmentWarningUtc).TotalSeconds < 5) return;
+        state.LastAlignmentWarningUtc = now;
+        Log.Warn($"taskbar layer alignment incomplete: hwnd=0x{hwnd.ToInt64():X}, {reason}");
+    }
+
+    private static bool? IsTaskbarAboveWindow(IntPtr hwnd, IntPtr tray)
+    {
+        if (!Interop.NativeMethods.IsWindow(hwnd) || !Interop.NativeMethods.IsWindow(tray)) return null;
+        if (!GetWindowBand(hwnd, out uint targetBand) || !GetWindowBand(tray, out uint trayBand) || targetBand != trayBand)
+            return null;
+
+        IntPtr current = hwnd;
+        for (int i = 0; i < 256; i++)
+        {
+            current = GetWindow(current, GW_HWNDPREV);
+            if (current == IntPtr.Zero) return false;
+            if (!Interop.NativeMethods.IsWindow(current)) return null;
+            if (!GetWindowBand(current, out uint currentBand)) return null;
+            if (currentBand != targetBand) return false;
+            if (current == tray || GetAncestor(current, GA_ROOT) == tray) return true;
+        }
+        // Reaching the traversal bound is unknown, not proof that the taskbar is below the target.
+        return null;
     }
 
     /// <summary>
@@ -391,6 +498,7 @@ internal static class AcrylicWindowHelper
     }
 
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;

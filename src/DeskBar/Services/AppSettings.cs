@@ -95,6 +95,13 @@ internal sealed class AppSettings
     public Dictionary<string, WirelessBatteryHistoryEntry> WirelessBatteryHistory { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [JsonIgnore] private readonly object _wirelessBatteryHistoryLock = new();
 
+    /// <summary>
+    /// 连续缺席多久才算「真的断开」（模式二据此隐藏胶囊）。
+    /// 取 2×<see cref="WirelessBatteryService.RefreshInterval"/>（60 秒）：单次漏读也只缺席一轮，
+    /// 不该让胶囊消失一轮；真拔掉设备会连续缺席很多轮。**改扫描周期时要同步这里。**
+    /// </summary>
+    private static readonly TimeSpan DisconnectGrace = TimeSpan.FromSeconds(120);
+
     internal IReadOnlyList<WirelessBatteryHistoryEntry> GetWirelessBatteryHistory()
     {
         lock (_wirelessBatteryHistoryLock)
@@ -121,7 +128,6 @@ internal sealed class AppSettings
                 string connection = string.IsNullOrWhiteSpace(device.Connection) ? old?.Connection ?? "无线设备" : device.Connection;
                 bool isConnected = device.IsConnected;
                 bool connectionKnown = device.ConnectionKnown;
-                bool hidden = device.IsHidden || (old?.Hidden ?? false);
                 bool stale = device.IsStale || (!hasCurrentPercent && old?.Percent >= 0);
                 if (old is null)
                 {
@@ -133,7 +139,8 @@ internal sealed class AppSettings
                         Percent = percent,
                         Connection = connection,
                         LastSeenUtc = DateTime.UtcNow,
-                        Hidden = hidden,
+                        // 显示模式是用户设置；新设备用默认「连接时显示」。
+                        DisplayMode = WirelessBatteryDisplayModes.Normalize(device.DisplayMode),
                         IsConnected = isConnected,
                         ConnectionKnown = connectionKnown,
                         IsStale = stale
@@ -142,17 +149,19 @@ internal sealed class AppSettings
                     continue;
                 }
 
-                bool persistentChanged = old.Name != name || old.Type != device.Type || old.Percent != percent || old.Connection != connection || old.Hidden != hidden;
+                // DisplayMode 不在这里改：它是用户设置，扫描只更新可测量的字段。
+                bool persistentChanged = old.Name != name || old.Type != device.Type || old.Percent != percent || old.Connection != connection
+                    || !old.IsConnected || old.MissingSinceUtc is not null;
                 old.IsConnected = isConnected;
                 old.ConnectionKnown = connectionKnown;
                 old.IsStale = stale;
+                old.MissingSinceUtc = null;   // 读到了：清掉缺席起点
                 if (persistentChanged)
                 {
                     old.Name = name;
                     old.Type = device.Type;
                     old.Percent = percent;
                     old.Connection = connection;
-                    old.Hidden = hidden;
                     old.LastSeenUtc = DateTime.UtcNow;
                     changed = true;
                 }
@@ -162,12 +171,30 @@ internal sealed class AppSettings
                 foreach (var entry in WirelessBatteryHistory.Values)
                 {
                     bool present = presentDevices.TryGetValue(entry.Id, out var current);
-                    bool connected = present && current!.IsConnected;
                     bool known = !present || current!.ConnectionKnown;
                     bool stale = !present || current!.IsStale || (current.Percent is < 0 or > 100 && entry.Percent >= 0);
-                    entry.IsConnected = connected;
                     entry.ConnectionKnown = known;
                     entry.IsStale = stale;
+
+                    if (present)
+                    {
+                        if (!entry.IsConnected) { entry.IsConnected = true; changed = true; }
+                        if (entry.MissingSinceUtc is not null) { entry.MissingSinceUtc = null; changed = true; }
+                        continue;
+                    }
+
+                    // 未读到：先记下缺席起点，连续缺席超过宽限期才判为断开，
+                    // 否则单次漏读就会让胶囊消失一整轮。
+                    if (entry.MissingSinceUtc is null)
+                    {
+                        entry.MissingSinceUtc = DateTime.UtcNow;
+                        changed = true;
+                    }
+                    else if (entry.IsConnected && DateTime.UtcNow - entry.MissingSinceUtc.Value >= DisconnectGrace)
+                    {
+                        entry.IsConnected = false;
+                        changed = true;
+                    }
                 }
             }
             else
@@ -194,14 +221,16 @@ internal sealed class AppSettings
         return merged;
     }
 
-    internal void SetWirelessBatteryHidden(string id, bool hidden)
+    internal void SetWirelessBatteryDisplayMode(string id, string mode)
     {
+        string normalized = WirelessBatteryDisplayModes.Normalize(mode);
         bool changed = false;
         lock (_wirelessBatteryHistoryLock)
         {
-            if (WirelessBatteryHistory.TryGetValue(id, out var entry) && entry.Hidden != hidden)
+            if (WirelessBatteryHistory.TryGetValue(id, out var entry) && entry.DisplayMode != normalized)
             {
-                entry.Hidden = hidden;
+                entry.DisplayMode = normalized;
+                entry.Hidden = false;   // 迁移用的旧字段，一旦有新值就清掉
                 changed = true;
             }
         }
@@ -373,6 +402,16 @@ internal sealed class AppSettings
         WirelessBatteryHistory = new Dictionary<string, WirelessBatteryHistoryEntry>(WirelessBatteryHistory ?? new Dictionary<string, WirelessBatteryHistoryEntry>(), StringComparer.OrdinalIgnoreCase);
         foreach (var key in WirelessBatteryDeviceTypes.Keys.ToArray())
             if (!IsKnownWirelessBatteryType(WirelessBatteryDeviceTypes[key]) || WirelessBatteryDeviceTypes[key] == "auto") WirelessBatteryDeviceTypes.Remove(key);
+        // 迁移旧版二态「隐藏」→ 三态里的「完全不显示」；其余一律规整到合法值（默认 connected）。
+        foreach (var entry in WirelessBatteryHistory.Values)
+        {
+            if (entry.Hidden)
+            {
+                entry.DisplayMode = WirelessBatteryDisplayModes.Never;
+                entry.Hidden = false;
+            }
+            entry.DisplayMode = WirelessBatteryDisplayModes.Normalize(entry.DisplayMode);
+        }
         if (!TryNormalizeTime(LightStartTime, out var lt)) lt = TimeSpan.FromHours(7);
         if (!TryNormalizeTime(DarkStartTime, out var dt)) dt = TimeSpan.FromHours(19);
         LightStartTime = FormatTime(lt);

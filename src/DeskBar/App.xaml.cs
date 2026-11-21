@@ -24,6 +24,8 @@ public partial class App : System.Windows.Application
     private Views.IslandBorderWindow? _islandBorderMiddle;
     private Views.IslandBorderWindow? _islandBorderTray;
     private System.Windows.Threading.DispatcherTimer? _ownerGuardTimer;
+    private System.Windows.Threading.DispatcherTimer? _layerGuardTimer;
+    private bool _layerGuardWasFullscreen;
     private static readonly uint WM_TASKBARCREATED = Interop.NativeMethods.RegisterWindowMessage("TaskbarCreated");
     private AppSettings _settings = new();
 
@@ -176,6 +178,7 @@ public partial class App : System.Windows.Application
 
         // 初始化创建并启动四大浮岛组件
         CreateWidgetWindows();
+        StartLayerGuard();
         StartOwnerGuard();
 
         // 同步开机自启配置：单通道 HKCU Run。
@@ -687,6 +690,42 @@ public partial class App : System.Windows.Application
 
     private DateTime _lastRecreateTime = DateTime.MinValue;
 
+    private void StartLayerGuard()
+    {
+        _layerGuardTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _layerGuardTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                var capsule = _capsule;
+                var monitor = _monitorWindow;
+                var wireless = _wirelessBatteryWindow;
+                bool maintainCapsule = capsule?.WantsLayerMaintenance == true;
+                bool maintainMonitor = monitor?.WantsLayerMaintenance == true;
+                bool maintainWireless = wireless?.WantsLayerMaintenance == true;
+                if (!maintainCapsule && !maintainMonitor && !maintainWireless) return;
+
+                bool isFullscreen = TaskbarService.IsFullscreenForeground();
+                bool resumedFromFullscreen = _layerGuardWasFullscreen && !isFullscreen;
+                _layerGuardWasFullscreen = isFullscreen;
+
+                if (maintainCapsule) AcrylicWindowHelper.MaintainTaskbarLayer(capsule!, shouldBeVisible: true, isFullscreen);
+                if (maintainMonitor)
+                {
+                    AcrylicWindowHelper.MaintainTaskbarLayer(monitor!, shouldBeVisible: true, isFullscreen);
+                    if (resumedFromFullscreen && !isFullscreen && monitor!.IsVisible && maintainWireless)
+                        UpdateWirelessBatteryPlacement();
+                }
+                if (maintainWireless) AcrylicWindowHelper.MaintainTaskbarLayer(wireless!, shouldBeVisible: true, isFullscreen);
+            }
+            catch { }
+        };
+        _layerGuardTimer.Start();
+    }
+
     /// <summary>
     /// 主显示器是否处于纵向（竖屏）。DeskBar 的任务栏浮岛全部按横向任务栏设计，
     /// 竖屏下会出现位置错乱，所以检测到竖屏就主动退出。
@@ -798,6 +837,7 @@ public partial class App : System.Windows.Application
         {
             try { _media?.Dispose(); } catch { }
             try { _ownerGuardTimer?.Stop(); } catch { }
+            try { _layerGuardTimer?.Stop(); } catch { }
             try { _capsule?.Close(); } catch { }
             try { _monitor?.Dispose(); } catch { }
             try { _monitorWindow?.Close(); } catch { }
