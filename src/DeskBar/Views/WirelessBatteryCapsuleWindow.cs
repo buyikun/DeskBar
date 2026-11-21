@@ -126,6 +126,7 @@ internal sealed class WirelessBatteryCapsuleWindow : Window
         _monitorBoundsPx = monitorBoundsPx;
         if (!_settings.WirelessBatteryEnabled) { HideCapsule(); return; }
         if (TaskbarService.IsFullscreenForeground()) return;
+        // 已由共享 layerGuard 为截图遮罩折叠时，不要在遮罩消失前主动重显。
         if (AcrylicWindowHelper.IsLayerSuppressed(this) && !IsVisible) return;
         // 所有设备都被设成「不显示」时，整块胶囊一起收起，而不是留一个空的「无线 --」。
         // （_devices 为空表示还没检测到任何设备，那种情况下保留占位提示。）

@@ -48,18 +48,11 @@ internal sealed class WirelessBatteryHistoryEntry
     public DateTime LastSeenUtc { get; set; }
     /// <summary>显示模式，见 <see cref="WirelessBatteryDisplayModes"/>。默认「连接时显示」。</summary>
     public string DisplayMode { get; set; } = WirelessBatteryDisplayModes.Connected;
-    /// <summary>旧版二态「隐藏」字段，仅用于迁移成 <see cref="DisplayMode"/> = never，不再写入。</summary>
+    /// <summary>旧版二态配置兼容字段；Normalize 迁移到 DisplayMode 后始终清 false。</summary>
     public bool Hidden { get; set; }
-    /// <summary>
-    /// 上一次已知的连接状态。**必须落盘**：模式二（连接时显示/断开隐藏）依赖它，
-    /// 若不落盘，每次启动它都从 false 起步，会把「接着的设备」判成断开、把胶囊整块藏掉。
-    /// </summary>
+    /// <summary>上一次已知的连接状态，持久化以支持「连接时显示」模式跨重启恢复。</summary>
     public bool IsConnected { get; set; }
-    /// <summary>
-    /// 连续「没被读到」的起始时刻；读到就清空，落盘以便跨重启保留。
-    /// 用于去抖：扫描周期 60 秒，AULA 这类省电设备单次漏读也会整轮缺席，
-    /// 只有连续缺席超过 DisconnectGrace 才算真的断开。
-    /// </summary>
+    /// <summary>本设备连续缺席的起点，持久化用于过滤单轮漏读。</summary>
     public DateTime? MissingSinceUtc { get; set; }
     [System.Text.Json.Serialization.JsonIgnore]
     public bool ConnectionKnown { get; set; }
@@ -112,6 +105,7 @@ internal sealed class WirelessBatteryService : IDisposable
         new Guid("83DA6326-97A6-4088-9453-A1923F573B29"), 15);
 
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan DisconnectGrace = TimeSpan.FromSeconds(120);
     private readonly object _stateLock = new();
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -260,8 +254,7 @@ internal sealed class WirelessBatteryService : IDisposable
         {
             if (_disposed || !_currentDevices.Any(device => StringComparer.OrdinalIgnoreCase.Equals(device.Id, id))) return;
             _settings.SetWirelessBatteryDisplayMode(id, mode);
-            var history = _settings.GetWirelessBatteryHistory();
-            updated = BuildHistoryDevices(history, _currentDevices.ToArray(), connectedKnown: false);
+            updated = BuildDisplayDevices(_settings.GetWirelessBatteryHistory(), _currentDevices);
             _currentDevices = updated;
             _statusText = updated.Count == 0 ? "尚无无线设备记录" : $"设备记录 {updated.Count} 台";
         }
@@ -276,7 +269,7 @@ internal sealed class WirelessBatteryService : IDisposable
             if (_disposed || !_currentDevices.Any(device => StringComparer.OrdinalIgnoreCase.Equals(device.Id, id))) return;
             _settings.RemoveWirelessBatteryHistory(id);
             var history = _settings.GetWirelessBatteryHistory();
-            updated = BuildHistoryDevices(history, _currentDevices.ToArray(), connectedKnown: false);
+            updated = BuildDisplayDevices(history, _currentDevices.ToArray());
             _currentDevices = updated;
             _statusText = updated.Count == 0 ? "尚无无线设备记录" : $"设备记录 {updated.Count} 台";
         }
@@ -309,6 +302,31 @@ internal sealed class WirelessBatteryService : IDisposable
         catch { }
     }
 
+    private static IReadOnlyList<WirelessBatteryDevice> BuildDisplayDevices(
+        IReadOnlyList<WirelessBatteryHistoryEntry> history,
+        IReadOnlyList<WirelessBatteryDevice> latestSnapshot)
+    {
+        var snapshotById = latestSnapshot.ToDictionary(device => device.Id, StringComparer.OrdinalIgnoreCase);
+        var result = new List<WirelessBatteryDevice>(history.Count);
+        foreach (var entry in history)
+        {
+            // 这里只把用户的 DisplayMode 叠到已发布快照；连接状态仍以去抖后的 history 为准。
+            // 不把当前设备快照当作新硬件扫描结果，以免一次模式切换重置断开宽限。
+            snapshotById.TryGetValue(entry.Id, out var snapshot);
+            result.Add(new WirelessBatteryDevice(
+                entry.Id,
+                snapshot?.Name ?? entry.Name,
+                snapshot?.Percent is >= 0 and <= 100 ? snapshot.Percent : entry.Percent,
+                snapshot?.Connection ?? entry.Connection,
+                snapshot?.IsStale ?? true,
+                snapshot?.Type ?? entry.Type,
+                entry.IsConnected,
+                snapshot?.ConnectionKnown ?? false,
+                entry.DisplayMode));
+        }
+        return Array.AsReadOnly(result.ToArray());
+    }
+
     private static IReadOnlyList<WirelessBatteryDevice> BuildHistoryDevices(
         IReadOnlyList<WirelessBatteryHistoryEntry> history,
         IReadOnlyList<WirelessBatteryDevice> found,
@@ -321,10 +339,9 @@ internal sealed class WirelessBatteryService : IDisposable
         foreach (var entry in history)
         {
             bool connected = byId.TryGetValue(entry.Id, out var live);
-            // 连接状态：found 里有就该用**它自己的** IsConnected；没有则沿用 history 里
-            // 「去抖后」的值（可能还在宽限期内）。不能写成 `connected || entry.IsConnected` ——
-            // SetDisplayMode 会把旧设备列表整个传进 found，那样所有历史设备都会被判成已连接。
-            bool isConnected = connected ? live!.IsConnected : entry.IsConnected;
+            // 完整扫描的结果已在 MergeWirelessBatteryHistory 中做过断开去抖；这里以 entry 为连接真值。
+            // found 只用于更新实时属性，不能用「是否在本批数组」替代去抖后的连接状态。
+            bool isConnected = entry.IsConnected;
             string name = connected && !string.IsNullOrWhiteSpace(live!.Name) ? live.Name : entry.Name;
             bool hasFreshPercent = connected && live!.Percent is >= 0 and <= 100;
             int percent = hasFreshPercent ? live!.Percent : entry.Percent;
